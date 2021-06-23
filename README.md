@@ -1,24 +1,31 @@
 # Description
 This is the code for the Quizzr server written in the Flask framework for Python 3.8. It handles POST requests to the
 `/upload/` webpage that include a form with the MIME type "multipart/form-data". The form must include the string fields
-`questionId` and `userId` and a file under the field `audio`. Currently, it only updates the MongoDB Quizzr Atlas in
-response to these requests and does not store the upload at all.
+`questionId` and `userId` and a WAV file under the field `audio`. Currently, it updates the MongoDB Quizzr Atlas in
+response to these requests and sends the upload to the Google Drive stored on the Quizzr account.
 # Installation
 1. Clone this repository.
 2. Install `pip`.
 3. Install all the necessary dependencies by executing `pip install requirements.txt` in the folder of the repository.
-4. Get the connection string from the MongoDB Quizzr Atlas and copy it into a text file.
-5. Set the environment variable `CONNECTION_STRING_PATH` to be the absolute path of the text file on your machine by
-   executing `export CONNECTION_STRING_PATH=<path>`, replacing `<path>` with this path.
+4. Create the directories `privatedata` and `recordings` in the repository.
+5. Create a text file named `connectionstring` in the `privatedata` directory and copy the connection string from the
+   MongoDB Quizzr Atlas into this text file. Make sure that the name of the text file does not include any extensions, 
+   such as `.txt`.
+6. Login to the Quizzr Google Account on Google Cloud Platform and download the credentials file for the client "Quizzr 
+   Server". Rename it to `gdrive_secret.json` and put it in the `privatedata` directory.
 # Running the Server for Testing
 The following instructions are for running the server for testing purposes. Please do not follow these instructions if
 you plan on running it in production.
 
-To start the server, enter the following commands into the terminal:
+To start the server, enter the following commands into the terminal, replacing `dir` with the absolute directory of the
+repository on your machine:
 ```bash
+$ export SERVER_DIR=dir
 $ export FLASK_APP=server
 $ flask run
 ```
+If this is the first time running the server, you will be asked to go through an authentication process by navigating to
+a URL. Please follow these instructions. \
 You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 
