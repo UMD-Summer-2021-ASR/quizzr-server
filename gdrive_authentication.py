@@ -20,33 +20,33 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-# TODO: Convert to class GDriveAuth.
 
+class GDriveAuth:
+    def __init__(self, token_dir):
+        self.token_path = os.path.join(token_dir, 'token.json')
+        # If modifying these scopes, delete the file token.json.
+        scopes = ['https://www.googleapis.com/auth/drive']
+        self.creds = None
+        # The file token.json stores the user's access and refresh tokens, and is
+        # created automatically when the authorization flow completes for the first
+        # time.
+        if os.path.exists(self.token_path):
+            self.creds = Credentials.from_authorized_user_file(self.token_path, scopes)
+        # If there are no (valid) credentials available, let the user log in.
+        if not self.creds or not self.creds.valid:
+            if self.creds and self.creds.expired and self.creds.refresh_token:
+                self.creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    os.path.join(token_dir, 'gdrive_secret.json'), scopes)
+                self.creds = flow.run_local_server(port=0)
+            # Save the credentials for the next run
+            with open(self.token_path, 'w') as token:
+                token.write(self.creds.to_json())
 
-def setup_drive(token_dir):
-    token_path = os.path.join(token_dir, 'token.json')
-    # If modifying these scopes, delete the file token.json.
-    scopes = ['https://www.googleapis.com/auth/drive']
-    creds = None
-    # The file token.json stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
-    if os.path.exists(token_path):
-        creds = Credentials.from_authorized_user_file(token_path, scopes)
-    # If there are no (valid) credentials available, let the user log in.
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                os.path.join(token_dir, 'gdrive_secret.json'), scopes)
-            creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
-        with open(token_path, 'w') as token:
-            token.write(creds.to_json())
+        self.drive = build('drive', 'v3', credentials=self.creds)
 
-    return build('drive', 'v3', credentials=creds)
-
-
-if __name__ == '__main__':
-    setup_drive(os.path.join(os.path.dirname(os.path.abspath(__file__)), "privatedata"))
+    def refresh(self):
+        self.creds.refresh(Request())
+        with open(self.token_path, 'w') as token:
+            token.write(self.creds.to_json())

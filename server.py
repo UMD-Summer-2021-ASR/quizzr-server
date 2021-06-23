@@ -83,7 +83,7 @@ def recording_listener():
 @app.route("/answerquestion/", methods=["GET"])
 def select_answer_question():
     if not rec_question_ids:
-        result = "rec_not_found"
+        # result = "rec_not_found"
         return "Could not find a question to answer."
     next_question = rec_questions.find_one({"_id": random.choice(rec_question_ids)})
     audio_cursor = audio_descriptors.find(
@@ -113,12 +113,14 @@ def recording_listener_test():
 
 def upload_file(file):
     # TODO: Determine if it is possible to do this in a way that does not require storing the file on the machine.
+    if gdrive.creds.expired:
+        gdrive.refresh()
     file_name = "temp.wav"
     file_path = os.path.join(REC_DIR, file_name)
     file.save(file_path)
     file_metadata = {}
     media = MediaFileUpload(file_path, mimetype="audio/wav")
-    gfile = gdrive.files().create(body=file_metadata, media_body=media, fields="id").execute()
+    gfile = gdrive.drive.files().create(body=file_metadata, media_body=media, fields="id").execute()
     os.remove(file_path)
     return gfile.get("id")
 
@@ -154,7 +156,7 @@ rec_questions = database.RecordedQuestions
 unrec_questions = database.UnrecordedQuestions
 audio_descriptors = database.Audio
 
-gdrive = gdrive_authentication.setup_drive(SECRET_DATA_DIR)  # TODO: Use gdrive_authentication.GDriveAuth() instead
+gdrive = gdrive_authentication.GDriveAuth(SECRET_DATA_DIR)
 
 rec_question_ids = get_ids(rec_questions)
 unrec_question_ids = get_ids(unrec_questions)
