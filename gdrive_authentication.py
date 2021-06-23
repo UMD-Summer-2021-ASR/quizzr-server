@@ -20,6 +20,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
+# TODO: Convert to class GDriveAuth.
+
 
 def setup_drive(token_dir):
     token_path = os.path.join(token_dir, 'token.json')
