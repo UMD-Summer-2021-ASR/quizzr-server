@@ -1,12 +1,11 @@
 # Quizzr.io Back-end
 ## Overview
 This is the code for the Quizzr server written in the Flask framework for Python 3.8. Features:
-* Handles POST requests to the `/upload/` webpage that include a form with the MIME type "multipart/form-data". The 
-  form must include the string fields `questionId` and `userId` and a WAV file under the field `audio`. Currently, it
-  updates the MongoDB Quizzr Atlas in response to these requests and sends the upload to the Google Drive stored on the
-  Quizzr account.
+* Handles POST requests to the `/upload` webpage that include a form with the MIME type "multipart/form-data". The 
+  form must include a WAV file under the field `audio`. Currently, it updates the MongoDB Quizzr Atlas in response to
+  these requests and sends the upload to the Google Drive stored on the  Quizzr account.
 * Handles GET requests to record and answer questions (through `/recordquestion/` and `/answerquestion/` respectively).
-  Currently, it only provides responses formatted for testing.
+  It provides responses in JSON format.
 ## Installation
 1. Clone this repository.
 2. Install `pip`.
@@ -36,8 +35,8 @@ Stop the server using Ctrl + C.
 There is an option for running this server in debug mode. To do that, simply set `FLASK_ENV` to `development` in the
 terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.
 ### Testing the Upload Handler
-Navigate to the page `/uploadtest/` and fill in the fields in the resulting GUI. You will need to refer to the MongoDB
-Quizzr Atlas to fill in the Question ID and User ID fields. Note that upon submitting, the contents of the atlas will be
+Navigate to the page `/uploadtest/` and fill in the fields in the resulting GUI. You do not need to fill in the question
+ID and user ID fields as of this version. Note that upon submitting, the contents of the atlas will be
 altered, and the server has no built-in way of reversing these changes.
 ### Testing Question Selectors
 Navigate to the page `/recordquestion/` for questions to record or the `/answerquestion/` for questions to answer.
