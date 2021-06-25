@@ -103,12 +103,8 @@ def upload_to_gdrive(file_path):
     os.remove(file_path.split(".wav")[0] + ".json")
     gfile_id = gfile.get("id")
 
-    # In case this is needed.
-    """permission = {
-        "type": "anyone",
-        "role": "reader"
-    }
-    gdrive.drive.permissions().create(fileId=gfile_id, body=permission, fields="id").execute()"""
+    permission = {"type": "anyone", "role": "reader"}
+    gdrive.drive.permissions().create(fileId=gfile_id, body=permission, fields="id").execute()
     return gfile_id
 
 
@@ -167,6 +163,7 @@ def upload_audio(file_path):
     users.update_one(user_query, {"$push": {"recordedAudios": audio_id}})
 
 
+# TODO: Find out how to make these not global variables.
 VERSION = "0.0.0"
 SERVER_DIR = os.environ['SERVER_DIR']
 SECRET_DATA_DIR = os.path.join(SERVER_DIR, "privatedata")
