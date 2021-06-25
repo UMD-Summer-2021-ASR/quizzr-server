@@ -6,6 +6,7 @@ from datetime import datetime
 from bson import ObjectId
 from flask import Flask, request, render_template
 import pymongo
+from flask_cors import CORS
 from googleapiclient.http import MediaFileUpload
 
 import gdrive_authentication
@@ -25,6 +26,7 @@ class AutoIncrementer:
 
 
 app = Flask(__name__)
+CORS(app)
 
 
 @app.route("/")
@@ -88,7 +90,7 @@ def save_recording(file, metadata):
 
 
 def get_file_name():
-    return str(queue_namer.get_next())
+    return str(queue_id_gen.get_next())
 
 
 def upload_to_gdrive(file_path):
@@ -183,7 +185,7 @@ gdrive = gdrive_authentication.GDriveAuth(SECRET_DATA_DIR)
 
 rec_question_ids = get_ids(rec_questions)
 unrec_question_ids = get_ids(unrec_questions)
-queue_namer = AutoIncrementer()
+queue_id_gen = AutoIncrementer()
 
 if __name__ == "__main__":
     # recording_listener_test_desktop()
