@@ -6,17 +6,19 @@ This is the code for the Quizzr server written in the Flask framework for Python
   these requests and sends the upload to the Google Drive stored on the  Quizzr account.
 * Handles GET requests to record and answer questions (through `/recordquestion/` and `/answerquestion/` respectively).
   It provides responses in JSON format.
+* Handles GET requests for batches of unprocessed audio documents through `/audio/unprocessed/`.
 ## Installation
 Prior to installation, you will need to have `pip` installed.
 1. Clone this repository.
 2. Install all the necessary dependencies by executing `pip install requirements.txt` in the folder of the repository.
    It may be a good idea to set up a virtual environment prior to doing this step to avoid conflicts with already
    install packages.
-3. Create the directories `privatedata` and `recordings` in the repository.
-4. Create a text file named `connectionstring` in the `privatedata` directory and copy the connection string from the
+3. Install [Gentle](https://github.com/lowerquality/gentle).
+4. Create the directories `privatedata` and `recordings` in the repository.
+5. Create a text file named `connectionstring` in the `privatedata` directory and copy the connection string from the
    MongoDB Quizzr Atlas into this text file. Make sure that the name of the text file does not include any extensions, 
    such as `.txt`.
-5. Login to the Quizzr Google Account on Google Cloud Platform and download the credentials file for the client "Quizzr 
+6. Login to the Quizzr Google Account on Google Cloud Platform and download the credentials file for the client "Quizzr 
    Server". Rename it to `gdrive_secret.json` and put it in the `privatedata` directory.
 ## Updating
 To update the repository on your machine, either use `git pull` (requires you to commit your changes) or reinstall the
@@ -30,7 +32,6 @@ you plan on running it in production.
 To start the server, enter the following commands into the terminal, replacing `dir` with the absolute directory of the
 repository on your machine:
 ```bash
-$ export SERVER_DIR=dir
 $ export FLASK_APP=server
 $ flask run
 ```
