@@ -38,7 +38,7 @@ THE SOFTWARE.
 '''
 
 
-def get_forced_alignment(speech_file: str, transcript: str, log_level='CRITICAL'):
+def get_forced_alignment(speech_file: str, transcript: str):
     def on_progress(p): # align.py stuff
         for k,v in p.items():
             logging.debug("%s: %s" % (k, v))
@@ -49,8 +49,6 @@ def get_forced_alignment(speech_file: str, transcript: str, log_level='CRITICAL'
     disfluency = False
     conservative = False
     disfluencies = set(['uh', 'um'])
-
-    logging.getLogger().setLevel(log_level.upper())
 
     logging.info("Retrieving forced alignment...")
 

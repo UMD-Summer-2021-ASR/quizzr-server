@@ -9,6 +9,8 @@ import pymongo
 from flask_cors import CORS
 
 import gdrive_authentication
+import rec_processing
+from server_test import timeit
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -30,13 +32,13 @@ class AutoIncrementer:
 
 
 class QuizzrServer:
-    VERSION = "0.0.0"
-
     def __init__(self):
         # self.SERVER_DIR = os.environ['SERVER_DIR']
         self.SERVER_DIR = os.path.dirname(__file__)
         self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "privatedata")
         self.REC_DIR = os.path.join(self.SERVER_DIR, "recordings")
+        with open(os.path.join(self.SERVER_DIR, "metadata.json")) as meta_f:
+            self.meta = json.load(meta_f)
 
         with open(os.path.join(self.SECRET_DATA_DIR, "connectionstring")) as f:
             self.mongodb_client = pymongo.MongoClient(f.read())
@@ -53,12 +55,13 @@ class QuizzrServer:
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         self.queue_id_gen = AutoIncrementer()
 
+        self.processor = rec_processing.QuizzrProcessor(self.database, self.REC_DIR, self.meta["version"], self.SECRET_DATA_DIR, self.gdrive)
+
     def save_recording(self, file, metadata):
         file_name = self.get_file_name()
         file_path = os.path.join(self.REC_DIR, file_name)
         file.save(file_path + ".wav")
         with open(file_path + ".json", "w") as meta_f:
-            json.dump(metadata, meta_f)
             meta_f.write(bson.json_util.dumps(metadata))
         return file_path + ".wav"
 
@@ -81,17 +84,17 @@ qs = QuizzrServer()
 # TODO: multiprocessing
 
 
+@timeit
 @app.route("/upload", methods=["POST"])
 def recording_listener():
     recording = request.files["audio"]
     # question_id = request.form["questionId"]
     # user_id = request.form["userId"]
-    question_id = "60d0b89eba9c14e2eef1b791"
+    question_id = "60da3cda2d57ba9e4fc63ca6"
     user_id = "60d0ade3ba9c14e2eef1b78e"
 
     file_path = qs.save_recording(recording, {"questionId": bson.ObjectId(question_id), "userId": bson.ObjectId(user_id)})
-    # upload_audio(file_path)
-    # Notify the processor afterwards
+    qs.processor.pick_submissions(rec_processing.QuizzrWatcher.queue_submissions(qs.REC_DIR))
 
     return render_template("submission.html")
 
@@ -137,7 +140,7 @@ def batch_unprocessed_audio():
     qids = list(qid2entries.keys())
     logging.info(f"Found {len(qids)} unprocessed audio document(s)")
 
-    logging.info("Finding associated unrecorded questions...")
+    logging.info("Finding associated unrecorded question(s)...")
     unrec_cursor = qs.unrec_questions.find({"_id": {"$in": qids}})
     found_unrec_qids = []
     for question in unrec_cursor:
@@ -150,7 +153,7 @@ def batch_unprocessed_audio():
 
     found_rec_qids = [qid for qid in qids if qid not in found_unrec_qids]
 
-    logging.info(f"Finding {len(found_rec_qids)} of {len(qids)} recorded questions...")
+    logging.info(f"Finding {len(found_rec_qids)} of {len(qids)} recorded question(s)...")
     rec_cursor = qs.rec_questions.find({"_id": {"$in": found_rec_qids}})
     rec_count = 0
     for question in rec_cursor:
@@ -164,7 +167,40 @@ def batch_unprocessed_audio():
         for entry in entries:
             results.append(entry)
     logging.debug(f"Final Results: {results}")
-    return results
+    return {"results": results}
+
+
+@app.route("/audio/processed", methods=["POST"])
+def processed_audio():
+    # For now, expect form data instead of JSON data.
+    gfile_id = request.form["gDriveId"]
+    vtt = request.form["vtt"]
+    accuracy = request.form["accuracy"]
+    batch_number = request.form["batchNumber"]
+    audio_doc = qs.unproc_audio.find_one({"_id": gfile_id})
+    qid = audio_doc["questionId"]
+    proc_audio_entry = {"_id": gfile_id, "vtt": vtt, "version": audio_doc["version"], "user": audio_doc["userId"],
+                        "question": qid, "accuracy": accuracy, "batchNumber": batch_number}
+    qs.unproc_audio.delete_one({"_id": gfile_id})
+    qs.audio.insert_one(proc_audio_entry)
+
+    question = qs.unrec_questions.find_one({"_id": qid})
+    unrecorded = True
+    if question is None:
+        unrecorded = False
+        question = qs.rec_questions.find_one({"_id": qid})
+
+    if unrecorded:
+        question["recordings"] = [gfile_id]
+        qs.unrec_questions.delete_one({"_id": qid})
+        qs.unrec_question_ids.remove(qid)
+        qs.rec_questions.insert_one(question)
+        qs.rec_question_ids.append(qid)
+    else:
+        qs.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": gfile_id}})
+
+    qs.users.update_one({"_id": audio_doc["userId"]}, {"$push": {"recordedAudios": gfile_id}})
+    return {"msg": "proc_audio.update_success"}
 
 
 @app.route("/uploadtest/")  # Do not include in deployment.
@@ -172,40 +208,9 @@ def recording_listener_test():
     return render_template("uploadtest.html")
 
 
-# DEPRECATED
-def upload_audio(file_path):
-    accuracy, vtt = qs.get_accuracy_and_vtt(file_path)
-    file_id = qs.upload_to_gdrive(file_path)
-
-    with open(file_path.split(".wav")[0] + ".json", "r") as meta_f:
-        metadata_s = meta_f.read()
-        metadata = bson.json_util.loads(metadata_s)
-        question_id = metadata["questionId"]
-        user_id = metadata["userId"]
-
-    question_query = {"_id": question_id}
-    unrecorded = True
-    question = qs.unrec_questions.find_one_and_delete(question_query)
-    if question is None:
-        unrecorded = False
-        question = qs.rec_questions.find_one(question_query)
-    else:
-        qs.unrec_question_ids.remove(question_id)
-
-    audio_id = file_id
-    audio_entry = {"_id": file_id, "vtt": vtt, "version": qs.VERSION, "user": user_id, "question": question_id,
-                   "accuracy": accuracy}
-    qs.audio.insert_one(audio_entry)
-
-    if unrecorded:
-        question["recordings"] = [audio_id]
-        qs.rec_questions.insert_one(question)
-        qs.rec_question_ids.append(question_id)
-    else:
-        qs.rec_questions.update_one(question_query, {"$push": {"recordings": audio_id}})
-
-    user_query = {"_id": user_id}
-    qs.users.update_one(user_query, {"$push": {"recordedAudios": audio_id}})
+@app.route("/processedaudiotest/")  # Do not include in deployment.
+def processed_audio_test():
+    return render_template("processedaudiotest.html")
 
 
 if __name__ == "__main__":

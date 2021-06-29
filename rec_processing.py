@@ -20,18 +20,6 @@ import gdrive_authentication
 logging.basicConfig(level=logging.DEBUG)
 
 
-def watch(watch_dir, func, interval=2):
-    while True:  # TODO: Make it handle KeyboardInterrupt
-        found_files = os.listdir(watch_dir)
-        if found_files:
-            queued_submissions = set()
-            for found_file in found_files:
-                submission_name = found_file.split(".")[0]
-                queued_submissions.add(submission_name)
-            func(queued_submissions)
-        time.sleep(interval)
-
-
 class QuizzrWatcher:
     def __init__(self, watch_dir, func, interval=2):
         self.done = False
@@ -49,20 +37,25 @@ class QuizzrWatcher:
 
     def execute(self):
         while not self.done:
-            found_files = os.listdir(self.watch_dir)
-            if found_files:
-                queued_submissions = set()
-                for found_file in found_files:
-                    submission_name = found_file.split(".")[0]
-                    queued_submissions.add(submission_name)
+            queued_submissions = self.queue_submissions(self.watch_dir)
+            if queued_submissions:
                 self.func(queued_submissions)
             time.sleep(self.interval)
 
         sys.exit(0)
 
+    @staticmethod
+    def queue_submissions(directory: str):
+        found_files = os.listdir(directory)
+        queued_submissions = set()
+        for found_file in found_files:
+            submission_name = found_file.split(".")[0]
+            queued_submissions.add(submission_name)
+        return queued_submissions
+
 
 class QuizzrProcessor:
-    def __init__(self, database, directory: str, version: str, secret_directory: str):
+    def __init__(self, database, directory: str, version: str, secret_directory: str, gdrive):
         self.VERSION = version
         self.DIRECTORY = directory
 
@@ -72,20 +65,17 @@ class QuizzrProcessor:
         self.audio = database.Audio
         self.unproc_audio = database.UnprocessedAudio
 
-        # TODO: Figure out multiprocessing in a better way
-        self.gdrive = gdrive_authentication.GDriveAuth(secret_directory)
+        self.gdrive = gdrive
 
         self.punc_regex = re.compile(r"[.?!,;:\"\-]")
         self.whitespace_regex = re.compile(r"\s+")
-        self.RECOGNIZER_TYPE = "Random"  # Easier to refactor.
+        self.RECOGNIZER_TYPE = "Gentle Forced Aligner"  # Easier to refactor.
         self.ACCURACY_CUTOFF = 0.5  # Hyperparameter
 
     # submissions do not have extensions
     def pick_submissions(self, submissions: List[str]):
-        logging.log(logging.INFO, f"Gathering metadata for {len(submissions)} submissions...")
+        logging.log(logging.INFO, f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
-
-        logging.log(logging.INFO, f"Evaluating {len(submissions)} submissions...")
 
         accepted_submissions = []
         accuracies = self.preprocess_submissions(submissions, sub2meta)
@@ -97,7 +87,7 @@ class QuizzrProcessor:
 
         logging.log(
             logging.INFO,
-            f"{self.RECOGNIZER_TYPE} sufficiently recognized {len(accepted_submissions)} of {len(submissions)} submissions"
+            f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)"
         )
 
         subs2gfids = self.gdrive_upload_many(accepted_submissions)
@@ -107,19 +97,28 @@ class QuizzrProcessor:
 
     def preprocess_submissions(self, submissions: List[str], sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, float]:
         # TODO: Make into batches if possible.
+        logging.log(logging.INFO, f"Evaluating {len(submissions)} submission(s)...")
+
+        num_finished_submissions = 0
         results = {}
         for submission in submissions:
             file_path = os.path.join(self.DIRECTORY, submission)
             wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
-            r_transcript = self.unrec_questions.find_one(
-                {"_id": sub2meta[submission]["questionId"]}, {"transcript": 1}
-            )["transcript"]
+            question = self.unrec_questions.find_one({"_id": sub2meta[submission]["questionId"]}, {"transcript": 1})
+            if question is None:
+                question = self.rec_questions.find_one({"_id": sub2meta[submission]["questionId"]}, {"transcript": 1})
 
-            # accuracy = self.get_accuracy(wav_file_path, r_transcript)
+            r_transcript = question["transcript"]
+
+            accuracy = self.get_accuracy(wav_file_path, r_transcript)
             # accuracy = self.ACCURACY_CUTOFF
-            accuracy = random.random()
-            logging.log(logging.DEBUG, f"Hypothesis for {submission} has accuracy {accuracy}")
+            # accuracy = random.random()
+
+            num_finished_submissions += 1
+
+            logging.log(logging.INFO, f"Finished evaluating {num_finished_submissions}/{len(submissions)} submissions")
+            logging.log(logging.DEBUG, f"Alignment for '{submission}' has accuracy {accuracy}")
             results[submission] = accuracy
         return results
 
@@ -155,6 +154,7 @@ class QuizzrProcessor:
             entry["_id"] = subs2gfids[submission]
             entry["questionId"] = ObjectId(question_id)
             entry["userId"] = ObjectId(user_id)
+            entry["version"] = self.VERSION
             mongodb_insert_batch.append(entry)
         results = self.unproc_audio.insert_many(mongodb_insert_batch)
         logging.log(logging.INFO, f"Inserted {len(results.inserted_ids)} documents into the UnprocessedAudio collection")
@@ -262,7 +262,8 @@ if __name__ == "__main__":
     REC_DIR = os.path.join(SERVER_DIR, "recordings")
     with open(os.path.join(SECRET_DATA_DIR, "connectionstring")) as f:
         mongodb_client = pymongo.MongoClient(f.read())
-    processor = QuizzrProcessor(mongodb_client.QuizzrDatabase, REC_DIR, "D_0.0.0", SECRET_DATA_DIR)
+    gdrive = gdrive_authentication.GDriveAuth(SECRET_DATA_DIR)
+    processor = QuizzrProcessor(mongodb_client.QuizzrDatabase, REC_DIR, "D_0.0.0", SECRET_DATA_DIR, gdrive)
     # processor = QuizzrProcessor(None, REC_DIR, "D_0.0.0", SECRET_DATA_DIR)
     watcher = QuizzrWatcher(REC_DIR, processor.pick_submissions)
     watcher.execute()
