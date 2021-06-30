@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import random
+from typing import Dict, Any
 
 import bson.json_util
 from flask import Flask, request, render_template
@@ -65,6 +66,44 @@ class QuizzrServer:
             meta_f.write(bson.json_util.dumps(metadata))
         return file_path + ".wav"
 
+    def update_processed_audio(self, arguments: Dict[str, Any]):
+        logging.debug("Retrieving arguments...")
+        gfile_id = arguments["gDriveId"]
+        vtt = arguments["vtt"]
+        accuracy = arguments["accuracy"]
+        batch_number = arguments["batchNumber"]
+        kaldi_metadata = arguments["metadata"]
+
+        logging.debug("Updating audio document with results from processing...")
+        audio_doc = self.unproc_audio.find_one({"_id": gfile_id})
+        qid = audio_doc["questionId"]
+        proc_audio_entry = {"_id": gfile_id, "vtt": vtt, "version": audio_doc["version"], "user": audio_doc["userId"],
+                            "question": qid, "accuracy": accuracy, "batchNumber": batch_number,
+                            "metadata": kaldi_metadata}
+        self.unproc_audio.delete_one({"_id": gfile_id})
+        self.audio.insert_one(proc_audio_entry)
+
+        logging.debug("Retrieving question from unrecorded collection...")
+        question = self.unrec_questions.find_one({"_id": qid})
+        unrecorded = question is not None
+        if unrecorded:
+            logging.debug("Unrecorded question not found")
+        else:
+            logging.debug("Found unrecorded question")
+
+        logging.debug("Updating question...")
+        if unrecorded:
+            question["recordings"] = [gfile_id]
+            self.unrec_questions.delete_one({"_id": qid})
+            self.unrec_question_ids.remove(qid)
+            self.rec_questions.insert_one(question)
+            self.rec_question_ids.append(qid)
+        else:
+            self.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": gfile_id}})
+
+        logging.debug("Updating user information...")
+        self.users.update_one({"_id": audio_doc["userId"]}, {"$push": {"recordedAudios": gfile_id}})
+
     def get_file_name(self):
         return str(self.queue_id_gen.get_next())
 
@@ -84,7 +123,6 @@ qs = QuizzrServer()
 # TODO: multiprocessing
 
 
-@timeit
 @app.route("/upload", methods=["POST"])
 def recording_listener():
     recording = request.files["audio"]
@@ -172,34 +210,12 @@ def batch_unprocessed_audio():
 
 @app.route("/audio/processed", methods=["POST"])
 def processed_audio():
-    # For now, expect form data instead of JSON data.
-    gfile_id = request.form["gDriveId"]
-    vtt = request.form["vtt"]
-    accuracy = request.form["accuracy"]
-    batch_number = request.form["batchNumber"]
-    audio_doc = qs.unproc_audio.find_one({"_id": gfile_id})
-    qid = audio_doc["questionId"]
-    proc_audio_entry = {"_id": gfile_id, "vtt": vtt, "version": audio_doc["version"], "user": audio_doc["userId"],
-                        "question": qid, "accuracy": accuracy, "batchNumber": batch_number}
-    qs.unproc_audio.delete_one({"_id": gfile_id})
-    qs.audio.insert_one(proc_audio_entry)
-
-    question = qs.unrec_questions.find_one({"_id": qid})
-    unrecorded = True
-    if question is None:
-        unrecorded = False
-        question = qs.rec_questions.find_one({"_id": qid})
-
-    if unrecorded:
-        question["recordings"] = [gfile_id]
-        qs.unrec_questions.delete_one({"_id": qid})
-        qs.unrec_question_ids.remove(qid)
-        qs.rec_questions.insert_one(question)
-        qs.rec_question_ids.append(qid)
-    else:
-        qs.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": gfile_id}})
-
-    qs.users.update_one({"_id": audio_doc["userId"]}, {"$push": {"recordedAudios": gfile_id}})
+    arguments_batch = request.get_json()
+    arguments_list = arguments_batch["arguments"]
+    logging.info(f"Updating data relating to {len(arguments_list)} audio documents...")
+    for arguments in arguments_list:
+        qs.update_processed_audio(arguments)
+    logging.info("Successfully updated data")
     return {"msg": "proc_audio.update_success"}
 
 

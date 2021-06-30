@@ -11,9 +11,9 @@ This is the code for the Quizzr server written in the Flask framework for Python
 ## Installation
 Prior to installation, you will need to have `pip` installed.
 1. Clone this repository.
-2. Install all the necessary dependencies by executing `pip install requirements.txt` in the folder of the repository.
+2. Install all the necessary dependencies by executing `pip install -r requirements.txt` in the folder of the repository.
    It may be a good idea to set up a virtual environment prior to doing this step to avoid conflicts with already
-   install packages.
+   installed packages.
 3. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the README.md document. If
    you are installing it through the source code on a Linux operating system, you may need to change
    `install_deps.sh` to be based on your distribution.
