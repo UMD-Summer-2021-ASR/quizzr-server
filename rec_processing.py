@@ -117,7 +117,7 @@ class QuizzrProcessor:
 
             num_finished_submissions += 1
 
-            logging.log(logging.INFO, f"Finished evaluating {num_finished_submissions}/{len(submissions)} submissions")
+            logging.log(logging.INFO, f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
             logging.log(logging.DEBUG, f"Alignment for '{submission}' has accuracy {accuracy}")
             results[submission] = accuracy
         return results
@@ -145,16 +145,8 @@ class QuizzrProcessor:
     def mongodb_insert_submissions(self, subs2gfids: Dict[str, str], sub2meta: Dict[str, Dict[str, Any]]):
         mongodb_insert_batch = []
         for submission in subs2gfids.keys():
-            entry = {}
-
-            metadata = sub2meta[submission]
-            question_id = metadata["questionId"]
-            user_id = metadata["userId"]
-
-            entry["_id"] = subs2gfids[submission]
-            entry["questionId"] = ObjectId(question_id)
-            entry["userId"] = ObjectId(user_id)
-            entry["version"] = self.VERSION
+            entry = {"_id": subs2gfids[submission], "version": self.VERSION}
+            entry.update(sub2meta[submission])
             mongodb_insert_batch.append(entry)
         results = self.unproc_audio.insert_many(mongodb_insert_batch)
         logging.log(logging.INFO, f"Inserted {len(results.inserted_ids)} documents into the UnprocessedAudio collection")

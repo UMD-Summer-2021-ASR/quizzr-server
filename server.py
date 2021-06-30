@@ -68,18 +68,15 @@ class QuizzrServer:
 
     def update_processed_audio(self, arguments: Dict[str, Any]):
         logging.debug("Retrieving arguments...")
-        gfile_id = arguments["gDriveId"]
-        vtt = arguments["vtt"]
-        accuracy = arguments["accuracy"]
-        batch_number = arguments["batchNumber"]
-        kaldi_metadata = arguments["metadata"]
+        gfile_id = arguments["_id"]
 
         logging.debug("Updating audio document with results from processing...")
         audio_doc = self.unproc_audio.find_one({"_id": gfile_id})
         qid = audio_doc["questionId"]
-        proc_audio_entry = {"_id": gfile_id, "vtt": vtt, "version": audio_doc["version"], "user": audio_doc["userId"],
-                            "question": qid, "accuracy": accuracy, "batchNumber": batch_number,
-                            "metadata": kaldi_metadata}
+
+        proc_audio_entry = audio_doc.copy()
+        proc_audio_entry.update(arguments)
+
         self.unproc_audio.delete_one({"_id": gfile_id})
         self.audio.insert_one(proc_audio_entry)
 
@@ -131,7 +128,10 @@ def recording_listener():
     question_id = "60da3cda2d57ba9e4fc63ca6"
     user_id = "60d0ade3ba9c14e2eef1b78e"
 
-    file_path = qs.save_recording(recording, {"questionId": bson.ObjectId(question_id), "userId": bson.ObjectId(user_id)})
+    file_path = qs.save_recording(recording, {
+        "questionId": bson.ObjectId(question_id),
+        "userId": bson.ObjectId(user_id)
+    })
     qs.processor.pick_submissions(rec_processing.QuizzrWatcher.queue_submissions(qs.REC_DIR))
 
     return render_template("submission.html")
@@ -142,11 +142,12 @@ def select_answer_question():
     if not qs.rec_question_ids:
         return {"err": "rec_not_found"}
     next_question = qs.rec_questions.find_one({"_id": random.choice(qs.rec_question_ids)})
+    # TODO: Handle cases where no audio is found.
     audio_cursor = qs.audio.find(
-        {"_id": {"$in": next_question["recordings"]}},
-        {"_id": 1, "vtt": 1, "accuracy": 1}
+        {"_id": {"$in": next_question["recordings"]}, "version": qs.meta["version"]},
+        {"_id": 1, "vtt": 1, "score": 1}
     )
-    audio_cursor.sort("accuracy", pymongo.DESCENDING)
+    audio_cursor.sort("score.wer", pymongo.ASCENDING)
     audio = audio_cursor[0]
     audio_cursor.close()
     result = {"vtt": audio["vtt"], "fileId": audio["_id"]}

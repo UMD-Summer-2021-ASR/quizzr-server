@@ -7,7 +7,8 @@ This is the code for the Quizzr server written in the Flask framework for Python
 * Handles GET requests to record and answer questions (through `/recordquestion/` and `/answerquestion/` respectively).
   It provides responses in JSON format.
 * Handles GET requests for batches of unprocessed audio documents through `/audio/unprocessed/`.
-* Handles POST requests for turning unprocessed audio documents into processed ones through `/audio/processed`.
+* Handles POST requests for turning unprocessed audio documents into processed ones through `/audio/processed`. Requires
+arguments to be in JSON format.
 ## Installation
 Prior to installation, you will need to have `pip` installed.
 1. Clone this repository.
@@ -23,6 +24,10 @@ Prior to installation, you will need to have `pip` installed.
    such as `.txt`.
 6. Login to the Quizzr Google Account on Google Cloud Platform and download the credentials file for the client "Quizzr 
    Server". Rename it to `gdrive_secret.json` and put it in the `privatedata` directory.
+### Using Docker
+You will need to have Docker installed to use a Dockerfile. Simply build the Docker image using `docker build`.
+Alternatively, you can pull from the [Docker Hub repository](https://hub.docker.com/r/chrisrapp999/quizzr_server) for
+the image.
 ### Updating
 To update the repository on your machine, either use `git pull` (requires you to commit your changes) or reinstall the
 repository.
@@ -52,5 +57,6 @@ be altered, and the server has no built-in way of reversing these changes. \
 **Question Selectors:** Navigate to the page `/recordquestion/` for questions to record or the `/answerquestion/` for
 questions to answer.
 Unprocessed Audio Batch Request: Navigate to the page `/audio/unprocessed/`. \
-**Processed Audio POST Request:** Navigate to the page `/processedaudiotest/` and fill in the fields in the resulting 
-GUI. You will need to refer to the MongoDB Quizzr Atlas to get the Google Drive File ID.
+**Processed Audio POST Request:** ~~Navigate to the page `/processedaudiotest/` and fill in the fields in the resulting 
+GUI. You will need to refer to the MongoDB Quizzr Atlas to get the Google Drive File ID.~~ This test has lost its
+functionality due to changes in the accepted argument format.
