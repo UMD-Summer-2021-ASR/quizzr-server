@@ -15,3 +15,6 @@ RUN cd quizzr-src && \
     pip install -r requirements.txt; \
     [ -d privatedata ] && echo "WARNING: privatedata directory copied"; \
     [ ! -d recordings ] && mkdir recordings; [ ! -d privatedata ] && mkdir privatedata
+WORKDIR /quizzr-src
+ENV FLASK_APP=server FLASK_ENV=development
+CMD ["flask", "run"]

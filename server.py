@@ -11,7 +11,6 @@ from flask_cors import CORS
 
 import gdrive_authentication
 import rec_processing
-from server_test import timeit
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -41,11 +40,13 @@ class QuizzrServer:
         with open(os.path.join(self.SERVER_DIR, "metadata.json")) as meta_f:
             self.meta = json.load(meta_f)
 
-        with open(os.path.join(self.SECRET_DATA_DIR, "connectionstring")) as f:
-            self.mongodb_client = pymongo.MongoClient(f.read())
+        # with open(os.path.join(self.SECRET_DATA_DIR, "connectionstring")) as f:
+        #     self.mongodb_client = pymongo.MongoClient(f.read())
+        self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
         self.gdrive = gdrive_authentication.GDriveAuth(self.SECRET_DATA_DIR)
 
         self.database = self.mongodb_client.QuizzrDatabase
+
         self.users = self.database.Users
         self.rec_questions = self.database.RecordedQuestions
         self.unrec_questions = self.database.UnrecordedQuestions
@@ -137,7 +138,7 @@ def recording_listener():
     return render_template("submission.html")
 
 
-@app.route("/answerquestion/", methods=["GET"])
+@app.route("/answer/", methods=["GET"])
 def select_answer_question():
     if not qs.rec_question_ids:
         return {"err": "rec_not_found"}
@@ -154,7 +155,7 @@ def select_answer_question():
     return result
 
 
-@app.route("/recordquestion/", methods=["GET"])
+@app.route("/record/", methods=["GET"])
 def select_record_question():
     if not qs.unrec_question_ids:
         return {"err": "unrec_not_found"}
@@ -164,12 +165,23 @@ def select_record_question():
     return {"transcript": result, "questionId": str(next_question_id)}
 
 
+@app.route("/upload/question", methods=["POST"])
+def upload_questions():
+    arguments_batch = request.get_json()
+    arguments_list = arguments_batch["arguments"]
+    logging.info(f"Uploading {len(arguments_list)} unrecorded questions...")
+    qs.unrec_questions.insert_many(arguments_list)
+    logging.info("Successfully uploaded questions")
+    return {"msg": "unrec_question.upload_success"}
+
+
 @app.route("/audio/unprocessed/", methods=["GET"])
 def batch_unprocessed_audio():
     batch_size = 32
     logging.info(f"Finding a batch ({batch_size} max) of unprocessed audio documents...")
     audio_cursor = qs.unproc_audio.find(batch_size=batch_size)
 
+    # TODO: Logic error in log message
     qid2entries = {}
     for audio_doc in audio_cursor:
         qid = audio_doc["questionId"]
@@ -220,12 +232,13 @@ def processed_audio():
     return {"msg": "proc_audio.update_success"}
 
 
-@app.route("/uploadtest/")  # Do not include in deployment.
+# DO NOT INCLUDE THE ROUTES BELOW IN DEPLOYMENT
+@app.route("/uploadtest/")
 def recording_listener_test():
     return render_template("uploadtest.html")
 
 
-@app.route("/processedaudiotest/")  # Do not include in deployment.
+@app.route("/processedaudiotest/")
 def processed_audio_test():
     return render_template("processedaudiotest.html")
 
