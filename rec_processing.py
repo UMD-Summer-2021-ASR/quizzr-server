@@ -94,6 +94,7 @@ class QuizzrProcessor:
         self.mongodb_insert_submissions(subs2gfids, sub2meta)
         for submission in accepted_submissions:
             self.delete_submission(submission)
+        return accepted_submissions
 
     def preprocess_submissions(self, submissions: List[str], sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, float]:
         # TODO: Make into batches if possible.

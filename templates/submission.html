@@ -5,12 +5,15 @@
     <title>Submission</title>
 </head>
 <body>
-  {% if msg == "empty_qids" %}
-    <p>Sorry. There are currently no questions for you to submit to. Please try again later.</p>
-  {% elif msg == "empty_uids" %}
-    <p>Sorry. There are currently no existing users. Please try again later.</p>
+  {% if status == "pass" %}
+    <p>Your submission passed the pre screening.</p>
+  {% elif status == "fail" %}
+    <p>Sorry. Your submission needs to be more accurate. Please try again.</p>
+  {% elif status == "err" %}
+    <p>Sorry. An issue was encountered while submitting. Please try again later. The issue is detailed below:</p>
+    <p>{{err}}</p>
   {% else %}
-    <p>Submission successful.</p>
+    <p>An unknown status was encountered. </p>
   {% endif %}
 </body>
 </html>
