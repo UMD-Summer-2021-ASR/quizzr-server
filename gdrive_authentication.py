@@ -50,3 +50,7 @@ class GDriveAuth:
         self.creds.refresh(Request())
         with open(self.token_path, 'w') as token:
             token.write(self.creds.to_json())
+
+
+if __name__ == '__main__':
+    GDriveAuth(os.path.join(os.path.dirname(__file__), "privatedata"))

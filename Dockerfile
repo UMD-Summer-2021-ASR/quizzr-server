@@ -17,4 +17,4 @@ RUN cd quizzr-src && \
     [ ! -d recordings ] && mkdir recordings; [ ! -d privatedata ] && mkdir privatedata
 WORKDIR /quizzr-src
 ENV FLASK_APP=server FLASK_ENV=development
-CMD ["flask", "run"]
+CMD ["flask", "run", "--host=0.0.0.0"]

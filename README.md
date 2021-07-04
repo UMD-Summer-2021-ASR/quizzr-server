@@ -22,14 +22,14 @@ Features:
 ## Installation
 Prior to installation, you will need to have `pip` installed.
 1. Clone this repository.
-2. Install all the necessary dependencies by executing `pip install -r requirements.txt` in the folder of the repository.
+1. Install all the necessary dependencies by executing `pip install -r requirements.txt` in the folder of the repository.
    It may be a good idea to set up a virtual environment prior to doing this step to avoid conflicts with already
    installed packages.
-3. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the README.md document. If
+1. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the README.md document. If
    you are installing it through the source code on a Linux operating system, you may need to change
    `install_deps.sh` to be based on your distribution.
-4. Create the directories `privatedata` and `recordings` in the repository.
-5. Login to the Quizzr Google Account on Google Cloud Platform and download the credentials file for the client "Quizzr 
+1. Create the directories `privatedata` and `recordings` in the repository.
+1. Login to the Quizzr Google Account on Google Cloud Platform and download the credentials file for the client "Quizzr 
    Server". Rename it to `gdrive_secret.json` and put it in the `privatedata` directory.
 
 ### Updating
@@ -51,7 +51,7 @@ $ flask run
 ```
 If this is the first time running the server, you will be asked to go through an authentication process by navigating to
 a URL. Please follow these instructions.\
-You can view the website through http://127.0.0.1:5000/.\
+You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 
 There is an option for running this server in debug mode. To do that, simply set `FLASK_ENV` to `development` in the
@@ -71,6 +71,12 @@ functionality due to changes in the accepted argument format.
 ## Using Docker
 There is a Dockerfile that you can use to build the Docker image for this repository. Alternatively, you can pull from
 the [Docker Hub repository](https://hub.docker.com/r/chrisrapp999/quizzr_server) for the image.\
+Prior to starting the Docker container, you will need to do the following:
+1. If you do not have `gdrive_authentication.py`, download it onto your machine.
+1. Create a directory named `privatedata` in the same parent directory as `gdrive_authentication.py`.
+1. Place `gdrive_secret.json` (see [Installation](#Installation)) in the `privatedata` directory.
+1. Run `gdrive_authentication.py`.
+
 The following command includes notable arguments for running this image:
   ```bash
   $ docker run -p 5000:5000 \
@@ -84,5 +90,5 @@ Notes:
 * `<privatedata-volume>` and `<recordings-volume>` are either named volumes or paths for bind mounts, and
   `<your-connection-string>` is the connection string for the MongoDB Client (see
   [Running the Server](#Running-the-Server)).
-* You will need to have the `gdrive_secret.json` file in the location of the mounting point for
-  `/quizzr-src/privatedata` (see [Installation](#Installation)).
+* You will need to have the `token.json` file in the location of the mounting point for
+  `/quizzr-src/privatedata`.
