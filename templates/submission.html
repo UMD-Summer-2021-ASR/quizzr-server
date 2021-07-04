@@ -2,9 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Successful Submission</title>
+    <title>Submission</title>
 </head>
 <body>
-  <p>Submission successful.</p>
+  {% if msg == "empty_qids" %}
+    <p>Sorry. There are currently no questions for you to submit to. Please try again later.</p>
+  {% elif msg == "empty_uids" %}
+    <p>Sorry. There are currently no existing users. Please try again later.</p>
+  {% else %}
+    <p>Submission successful.</p>
+  {% endif %}
 </body>
 </html>

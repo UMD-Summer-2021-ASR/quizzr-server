@@ -55,6 +55,7 @@ class QuizzrServer:
 
         self.rec_question_ids = self.get_ids(self.rec_questions)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
+        self.user_ids = self.get_ids(self.users)
         self.queue_id_gen = AutoIncrementer()
 
         self.processor = rec_processing.QuizzrProcessor(self.database, self.REC_DIR, self.meta["version"], self.SECRET_DATA_DIR, self.gdrive)
@@ -126,8 +127,16 @@ def recording_listener():
     recording = request.files["audio"]
     # question_id = request.form["questionId"]
     # user_id = request.form["userId"]
-    question_id = "60da3cda2d57ba9e4fc63ca6"
-    user_id = "60d0ade3ba9c14e2eef1b78e"
+    qids = qs.rec_question_ids + qs.unrec_question_ids
+    if not qids:
+        logger.error("No question IDs found in RecordedQuestions or UnrecordedQuestions. Aborting")
+        return render_template("submission.html", msg="empty_qids")
+
+    if not qs.user_ids:
+        logger.error("No user IDs found. Aborting")
+        return render_template("submission.html", msg="empty_uids")
+    question_id = random.choice(qids)
+    user_id = random.choice(qs.user_ids)
 
     file_path = qs.save_recording(recording, {
         "questionId": bson.ObjectId(question_id),
