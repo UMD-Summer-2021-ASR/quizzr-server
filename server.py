@@ -212,16 +212,18 @@ def recording_listener():
     recording = request.files["audio"]
     # question_id = request.form["questionId"]
     # user_id = request.form["userId"]
-    qids = qs.rec_question_ids + qs.unrec_question_ids
-    if not qids:
-        logger.error("No question IDs found in RecordedQuestions or UnrecordedQuestions. Aborting")
-        return render_template("submission.html", status="err", err="empty_qids")
+
+    # qids = qs.rec_question_ids + qs.unrec_question_ids
+    # if not qids:
+    #     logger.error("No question IDs found in RecordedQuestions or UnrecordedQuestions. Aborting")
+    #     return render_template("submission.html", status="err", err="empty_qids")
 
     if not qs.user_ids:
         logger.error("No user IDs found. Aborting")
         return render_template("submission.html", status="err", err="empty_uids")
 
-    question_id = random.choice(qids)
+    # question_id = random.choice(qids)
+    question_id = request.form["qid"]
     user_id = random.choice(qs.user_ids)
 
     submission_name = qs.save_recording(recording, {

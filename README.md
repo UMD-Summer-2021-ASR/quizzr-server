@@ -113,9 +113,9 @@ collection.
 Retrieves the document of a randomly selected question from the UnrecordedQuestions collection.
 
 ### `/upload` `POST`
-**`form` Parameters:** `File audio` \
+**`form` Parameters:** `File audio` `String qid` \
 **`JinjaTemplate` Response:** The result of the operation presented in a user-friendly format. \
-Pre-screens the given audio file for how accurately it matches to a randomly-selected question's transcript. If it is
+Pre-screens the given audio file for how accurately it matches to the given question's transcript. If it is
 accurate enough, the program will upload the audio file to Google Drive. It will also add an entry to the 
 UnprocessedAudio collection in the MongoDB Quizzr Atlas including the ID of the question it selected and the ID of a
 random user in the atlas.
