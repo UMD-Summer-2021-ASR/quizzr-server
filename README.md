@@ -49,7 +49,7 @@ terminal. By default, the debugger is enabled. To disable the debugger, add `--n
 
 ### Testing
 **Upload Handler:** Navigate to the page `/uploadtest/` and fill in the fields in the resulting GUI. You do not need to
-fill in the question ID and user ID fields as of this version. Note that upon submitting, the contents of the atlas wil
+fill in the user ID field as of this version. Note that upon submitting, the contents of the atlas wil
 be altered, and the server has no built-in way of reversing these changes. \
 **Question Selectors:** Navigate to the page `/recordquestion/` for questions to record or the `/answerquestion/` for
 questions to answer.
