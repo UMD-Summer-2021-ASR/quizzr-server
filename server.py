@@ -61,29 +61,41 @@ class QuizzrServer:
         self.processor = rec_processing.QuizzrProcessor(self.database, self.REC_DIR, self.meta["version"], self.SECRET_DATA_DIR, self.gdrive)
 
     def save_recording(self, file, metadata):
+        logging.info("Saving recording...")
         submission_name = self.get_submission_name()
+        logging.debug(f"submission_name = {submission_name}")
         submission_path = os.path.join(self.REC_DIR, submission_name)
         file.save(submission_path + ".wav")
+        logging.info("Saved recording successfully")
+
+        logging.info("Writing metadata...")
+        logging.debug(f"metadata = {metadata}")
         with open(submission_path + ".json", "w") as meta_f:
             meta_f.write(bson.json_util.dumps(metadata))
+        logging.info("Successfully wrote metadata")
         return submission_name
 
     def update_processed_audio(self, arguments: Dict[str, Any]):
+        logging.debug(f"arguments = {arguments}")
         logging.debug("Retrieving arguments...")
         gfile_id = arguments["_id"]
+        logging.debug(f"{type(gfile_id)} gfile_id = {gfile_id}")
 
         logging.debug("Updating audio document with results from processing...")
         audio_doc = self.unproc_audio.find_one({"_id": gfile_id})
+        logging.debug(f"audio_doc = {audio_doc}")
         qid = audio_doc["questionId"]
 
         proc_audio_entry = audio_doc.copy()
         proc_audio_entry.update(arguments)
+        logging.debug(f"proc_audio_entry = {proc_audio_entry}")
 
         self.unproc_audio.delete_one({"_id": gfile_id})
         self.audio.insert_one(proc_audio_entry)
 
         logging.debug("Retrieving question from unrecorded collection...")
         question = self.unrec_questions.find_one({"_id": qid})
+        logging.debug(f"question = {question}")
         unrecorded = question is not None
         if unrecorded:
             logging.debug("Unrecorded question not found")
@@ -125,8 +137,13 @@ qs = QuizzrServer()
 @app.route("/answer/", methods=["GET"])
 def select_answer_question():
     if not qs.rec_question_ids:
+        logging.error("No recorded questions found. Aborting")
         return {"err": "rec_not_found"}
-    next_question = qs.rec_questions.find_one({"_id": random.choice(qs.rec_question_ids)})
+    next_question_id = random.choice(qs.rec_question_ids)
+    logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id}")
+    next_question = qs.rec_questions.find_one({"_id": next_question_id})
+    logging.debug(f"next_question = {next_question}")
+
     # TODO: Handle cases where no audio is found.
     audio_cursor = qs.audio.find(
         {"_id": {"$in": next_question["recordings"]}, "version": qs.meta["version"]},
@@ -134,7 +151,9 @@ def select_answer_question():
     )
     audio_cursor.sort("score.wer", pymongo.ASCENDING)
     audio = audio_cursor[0]
+    logging.debug(f"audio = {audio}")
     audio_cursor.close()
+
     result = {"vtt": audio["vtt"], "id": audio["_id"]}
     return result
 
@@ -154,30 +173,39 @@ def batch_unprocessed_audio():
         qid2entries[qid].append({"_id": audio_doc["_id"]})
         audio_doc_count += 1
     qids = list(qid2entries.keys())
+    logging.debug(f"qid2entries = {qid2entries}")
     logging.info(f"Found {audio_doc_count} unprocessed audio document(s)")
 
     logging.info("Finding associated unrecorded question(s)...")
     unrec_cursor = qs.unrec_questions.find({"_id": {"$in": qids}})
     found_unrec_qids = []
-    for question in unrec_cursor:
+    for i, question in enumerate(unrec_cursor):
+        logging.debug(f"question {i} = {question}")
         qid = question["_id"]
-        found_unrec_qids.append(qid)
         entries = qid2entries[qid]
         for entry in entries:
             entry["transcript"] = question["transcript"]
+        found_unrec_qids.append(qid)
+    logging.debug(f"qid2entries = {qid2entries}")
     logging.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
 
     found_rec_qids = [qid for qid in qids if qid not in found_unrec_qids]
 
-    logging.info(f"Finding {len(found_rec_qids)} of {len(qids)} recorded question(s)...")
-    rec_cursor = qs.rec_questions.find({"_id": {"$in": found_rec_qids}})
-    rec_count = 0
-    for question in rec_cursor:
-        entries = qid2entries[question["_id"]]
-        for entry in entries:
-            entry["transcript"] = question["transcript"]
-        rec_count += 1
-    logging.info(f"Found {rec_count} recorded question(s)")
+    if found_rec_qids:
+        logging.info(f"Finding {len(found_rec_qids)} of {len(qids)} recorded question(s)...")
+        rec_cursor = qs.rec_questions.find({"_id": {"$in": found_rec_qids}})
+        rec_count = 0
+        for question in rec_cursor:
+            logging.debug(f"question {rec_count} = {question}")
+            entries = qid2entries[question["_id"]]
+            for entry in entries:
+                entry["transcript"] = question["transcript"]
+            rec_count += 1
+        logging.debug(f"qid2entries = {qid2entries}")
+        logging.info(f"Found {rec_count} recorded question(s)")
+    else:
+        logging.info("Found all questions. Skipping finding recorded questions")
+
     results = []
     for entries in qid2entries.values():
         for entry in entries:
@@ -200,9 +228,12 @@ def processed_audio():
 @app.route("/record/", methods=["GET"])
 def select_record_question():
     if not qs.unrec_question_ids:
+        logging.error("No unrecorded questions found. Aborting")
         return {"err": "unrec_not_found"}
     next_question_id = random.choice(qs.unrec_question_ids)
+    logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id}")
     next_question = qs.unrec_questions.find_one({"_id": next_question_id})
+    logging.debug(f"next_question = {next_question}")
     result = next_question["transcript"]
     return {"transcript": result, "id": str(next_question_id)}
 
@@ -215,22 +246,26 @@ def recording_listener():
 
     # qids = qs.rec_question_ids + qs.unrec_question_ids
     # if not qids:
-    #     logger.error("No question IDs found in RecordedQuestions or UnrecordedQuestions. Aborting")
+    #     logging.error("No question IDs found in RecordedQuestions or UnrecordedQuestions. Aborting")
     #     return render_template("submission.html", status="err", err="empty_qids")
 
     if not qs.user_ids:
-        logger.error("No user IDs found. Aborting")
+        logging.error("No user IDs found. Aborting")
         return render_template("submission.html", status="err", err="empty_uids")
 
     # question_id = random.choice(qids)
     question_id = request.form["qid"]
     user_id = random.choice(qs.user_ids)
+    logging.debug(f"question_id = {question_id}")
+    logging.debug(f"user_id = {user_id}")
 
     submission_name = qs.save_recording(recording, {
         "questionId": bson.ObjectId(question_id),
         "userId": bson.ObjectId(user_id)
     })
+    logging.debug(f"submission_name = {submission_name}")
     accepted_submissions = qs.processor.pick_submissions(rec_processing.QuizzrWatcher.queue_submissions(qs.REC_DIR))
+    logging.debug(f"accepted_submissions = {accepted_submissions}")
     if submission_name in accepted_submissions:
         return render_template("submission.html", status="pass")
 
@@ -241,6 +276,8 @@ def recording_listener():
 def upload_questions():
     arguments_batch = request.get_json()
     arguments_list = arguments_batch["arguments"]
+    logging.debug(f"arguments_list = {arguments_list}")
+
     logging.info(f"Uploading {len(arguments_list)} unrecorded questions...")
     qs.unrec_questions.insert_many(arguments_list)
     logging.info("Successfully uploaded questions")

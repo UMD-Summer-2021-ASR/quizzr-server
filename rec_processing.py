@@ -74,8 +74,9 @@ class QuizzrProcessor:
 
     # submissions do not have extensions
     def pick_submissions(self, submissions: List[str]):
-        logging.log(logging.INFO, f"Gathering metadata for {len(submissions)} submission(s)...")
+        logging.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
+        logging.debug(f"sub2meta = {sub2meta}")
 
         accepted_submissions = []
         accuracies = self.preprocess_submissions(submissions, sub2meta)
@@ -85,12 +86,10 @@ class QuizzrProcessor:
             else:
                 accepted_submissions.append(submission)
 
-        logging.log(
-            logging.INFO,
-            f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)"
-        )
+        logging.info(f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)")
 
         subs2gfids = self.gdrive_upload_many(accepted_submissions)
+        logging.debug(f"subs2gfids = {subs2gfids}")
         self.mongodb_insert_submissions(subs2gfids, sub2meta)
         for submission in accepted_submissions:
             self.delete_submission(submission)
@@ -98,7 +97,7 @@ class QuizzrProcessor:
 
     def preprocess_submissions(self, submissions: List[str], sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, float]:
         # TODO: Make into batches if possible.
-        logging.log(logging.INFO, f"Evaluating {len(submissions)} submission(s)...")
+        logging.info(f"Evaluating {len(submissions)} submission(s)...")
 
         num_finished_submissions = 0
         results = {}
@@ -106,8 +105,12 @@ class QuizzrProcessor:
             file_path = os.path.join(self.DIRECTORY, submission)
             wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
+            qid = sub2meta[submission]["questionId"]
+            logging.debug(f"{type(qid)} qid = {qid}")
+            logging.debug("Finding question in UnrecordedQuestions...")
             question = self.unrec_questions.find_one({"_id": sub2meta[submission]["questionId"]}, {"transcript": 1})
             if question is None:
+                logging.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
                 question = self.rec_questions.find_one({"_id": sub2meta[submission]["questionId"]}, {"transcript": 1})
 
             r_transcript = question["transcript"]
@@ -118,8 +121,8 @@ class QuizzrProcessor:
 
             num_finished_submissions += 1
 
-            logging.log(logging.INFO, f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
-            logging.log(logging.DEBUG, f"Alignment for '{submission}' has accuracy {accuracy}")
+            logging.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
+            logging.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
             results[submission] = accuracy
         return results
 
@@ -150,7 +153,7 @@ class QuizzrProcessor:
             entry.update(sub2meta[submission])
             mongodb_insert_batch.append(entry)
         results = self.unproc_audio.insert_many(mongodb_insert_batch)
-        logging.log(logging.INFO, f"Inserted {len(results.inserted_ids)} documents into the UnprocessedAudio collection")
+        logging.info(f"Inserted {len(results.inserted_ids)} document(s) into the UnprocessedAudio collection")
         return results
 
     # Helper methods
