@@ -12,7 +12,7 @@ from flask_cors import CORS
 import gdrive_authentication
 import rec_processing
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
 logger = logging.getLogger(__name__)
 
 # TODO: Implement rec_processing module through multiprocessing
@@ -33,6 +33,7 @@ class AutoIncrementer:
 
 class QuizzrServer:
     def __init__(self):
+        self.UNPROC_FIND_LIMIT = int(os.environ.get("UNPROC_BATCH_LIMIT")) or 32  # Arbitrary default
         # self.SERVER_DIR = os.environ['SERVER_DIR']
         self.SERVER_DIR = os.path.dirname(__file__)
         self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "privatedata")
@@ -160,9 +161,8 @@ def select_answer_question():
 
 @app.route("/audio/unprocessed/", methods=["GET"])
 def batch_unprocessed_audio():
-    batch_size = 32
-    logging.info(f"Finding a batch ({batch_size} max) of unprocessed audio documents...")
-    audio_cursor = qs.unproc_audio.find(batch_size=batch_size)
+    logging.info(f"Finding a batch ({qs.UNPROC_FIND_LIMIT} max) of unprocessed audio documents...")
+    audio_cursor = qs.unproc_audio.find(limit=qs.UNPROC_FIND_LIMIT)
 
     audio_doc_count = 0
     qid2entries = {}

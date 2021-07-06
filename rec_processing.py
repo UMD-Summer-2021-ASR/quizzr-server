@@ -17,8 +17,6 @@ from googleapiclient.http import MediaFileUpload
 import forced_alignment
 import gdrive_authentication
 
-logging.basicConfig(level=logging.DEBUG)
-
 
 class QuizzrWatcher:
     def __init__(self, watch_dir, func, interval=2):
