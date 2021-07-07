@@ -107,6 +107,10 @@ the associated questions and users to include the newly-processed audio document
 Note: If any associated questions are in the UnrecordedQuestions collection, they are moved to the RecordedQuestions
 collection.
 
+### `/download/<gfile_id>` `GET`
+**URL Parameters:** `gfile_id` \
+**Response:** The contents of a file with `gfile_id` stored in Google Drive.
+
 ### `/record/` `GET`
 **`json` Response:** `ObjectId id` `String transcript` \
 **Error Responses:** "unrec_not_found" \

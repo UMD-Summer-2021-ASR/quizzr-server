@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os
@@ -5,9 +6,10 @@ import random
 from typing import Dict, Any
 
 import bson.json_util
-from flask import Flask, request, render_template
+from flask import Flask, request, render_template, send_file
 import pymongo
 from flask_cors import CORS
+from googleapiclient.http import MediaIoBaseDownload
 
 import gdrive_authentication
 import rec_processing
@@ -33,7 +35,9 @@ class AutoIncrementer:
 
 class QuizzrServer:
     def __init__(self):
-        self.UNPROC_FIND_LIMIT = int(os.environ.get("UNPROC_BATCH_LIMIT")) or 32  # Arbitrary default
+        self.UNPROC_FIND_LIMIT = int(os.environ.get("UNPROC_FIND_LIMIT") or 32)  # Arbitrary default
+        self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
+
         # self.SERVER_DIR = os.environ['SERVER_DIR']
         self.SERVER_DIR = os.path.dirname(__file__)
         self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "privatedata")
@@ -115,6 +119,16 @@ class QuizzrServer:
 
         logging.debug("Updating user information...")
         self.users.update_one({"_id": audio_doc["userId"]}, {"$push": {"recordedAudios": gfile_id}})
+
+    def get_gfile(self, file_id: str):
+        file_request = self.gdrive.drive.files().get_media(fileId=file_id)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, file_request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+            print("Download %d%%." % int(status.progress() * 100))
+        return fh
 
     def get_submission_name(self):
         return str(self.queue_id_gen.get_next())
@@ -208,8 +222,7 @@ def batch_unprocessed_audio():
 
     results = []
     for entries in qid2entries.values():
-        for entry in entries:
-            results.append(entry)
+        results += entries
     logging.debug(f"Final Results: {results}")
     return {"results": results}
 
@@ -223,6 +236,12 @@ def processed_audio():
         qs.update_processed_audio(arguments)
     logging.info("Successfully updated data")
     return {"msg": "proc_audio.update_success"}
+
+
+@app.route("/download/<gfile_id>", methods=["GET"])
+def send_gfile(gfile_id):
+    file_data = qs.get_gfile(gfile_id)
+    return send_file(file_data, mimetype="audio/wav")
 
 
 @app.route("/record/", methods=["GET"])
