@@ -3,7 +3,6 @@ import time
 Simple Python module that contains a collection of testing functions and decorators.
 '''
 
-
 # Source: https://medium.com/pythonhive/python-decorator-to-measure-the-execution-time-of-methods-fa04cb6bb36d
 # Modified for Python 3.8.
 def timeit(method):
@@ -27,5 +26,10 @@ def test_function():
     print("Awake.")
 
 
+def main():
+    # Visit webpages
+    pass
+
+
 if __name__ == '__main__':
-    test_function()
+    main()

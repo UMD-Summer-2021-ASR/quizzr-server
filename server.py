@@ -1,3 +1,4 @@
+from datetime import datetime
 import io
 import json
 import logging
@@ -11,6 +12,7 @@ import pymongo
 from flask_cors import CORS
 from googleapiclient.http import MediaIoBaseDownload
 
+import error_handling
 import gdrive_authentication
 import rec_processing
 
@@ -18,19 +20,6 @@ logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
 logger = logging.getLogger(__name__)
 
 # TODO: Implement rec_processing module through multiprocessing
-
-
-class AutoIncrementer:
-    def __init__(self):
-        self.next = 0
-
-    def get_next(self):
-        next_num = self.next
-        self.next += 1
-        return next_num
-
-    def reset(self):
-        self.next = 0
 
 
 class QuizzrServer:
@@ -50,7 +39,7 @@ class QuizzrServer:
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
         self.gdrive = gdrive_authentication.GDriveAuth(self.SECRET_DATA_DIR)
 
-        self.database = self.mongodb_client.QuizzrDatabase
+        self.database = self.mongodb_client.QuizzrDatabaseDev
 
         self.users = self.database.Users
         self.rec_questions = self.database.RecordedQuestions
@@ -61,13 +50,12 @@ class QuizzrServer:
         self.rec_question_ids = self.get_ids(self.rec_questions)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         self.user_ids = self.get_ids(self.users)
-        self.queue_id_gen = AutoIncrementer()
 
         self.processor = rec_processing.QuizzrProcessor(self.database, self.REC_DIR, self.meta["version"], self.SECRET_DATA_DIR, self.gdrive)
 
     def save_recording(self, file, metadata):
         logging.info("Saving recording...")
-        submission_name = self.get_submission_name()
+        submission_name = self.get_next_submission_name()
         logging.debug(f"submission_name = {submission_name}")
         submission_path = os.path.join(self.REC_DIR, submission_name)
         file.save(submission_path + ".wav")
@@ -81,22 +69,33 @@ class QuizzrServer:
         return submission_name
 
     def update_processed_audio(self, arguments: Dict[str, Any]):
+        status = True  # Some results are unknown
         logging.debug(f"arguments = {arguments}")
         logging.debug("Retrieving arguments...")
-        gfile_id = arguments["_id"]
+        gfile_id = arguments.get("_id")
         logging.debug(f"{type(gfile_id)} gfile_id = {gfile_id}")
+        if gfile_id is None:
+            logging.warning("File ID not specified in arguments. Skipping")
+            return False
 
-        logging.debug("Updating audio document with results from processing...")
         audio_doc = self.unproc_audio.find_one({"_id": gfile_id})
         logging.debug(f"audio_doc = {audio_doc}")
-        qid = audio_doc["questionId"]
+        if audio_doc is None:
+            logging.warning("Audio document not found. Skipping")
+            return False
 
+        logging.debug("Updating audio document with results from processing...")
         proc_audio_entry = audio_doc.copy()
         proc_audio_entry.update(arguments)
         logging.debug(f"proc_audio_entry = {proc_audio_entry}")
 
-        self.unproc_audio.delete_one({"_id": gfile_id})
         self.audio.insert_one(proc_audio_entry)
+        self.unproc_audio.delete_one({"_id": gfile_id})
+
+        qid = audio_doc.get("questionId")
+        if qid is None:
+            logging.warning("Missing question ID. Skipping")
+            return False
 
         logging.debug("Retrieving question from unrecorded collection...")
         question = self.unrec_questions.find_one({"_id": qid})
@@ -110,15 +109,24 @@ class QuizzrServer:
         logging.debug("Updating question...")
         if unrecorded:
             question["recordings"] = [gfile_id]
-            self.unrec_questions.delete_one({"_id": qid})
-            self.unrec_question_ids.remove(qid)
             self.rec_questions.insert_one(question)
             self.rec_question_ids.append(qid)
+            self.unrec_questions.delete_one({"_id": qid})
+            self.unrec_question_ids.remove(qid)
         else:
-            self.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": gfile_id}})
+            results = self.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": gfile_id}})
+            if results.matched_count == 0:
+                logging.warning("Question ID is invalid")
 
         logging.debug("Updating user information...")
-        self.users.update_one({"_id": audio_doc["userId"]}, {"$push": {"recordedAudios": gfile_id}})
+        user_id = audio_doc.get("userId")
+        if user_id is None:
+            logging.warning("Audio document does not contain user ID. Skipping update")
+            return False
+        results = self.users.update_one({"_id": audio_doc["userId"]}, {"$push": {"recordedAudios": gfile_id}})
+        if results.matched_count == 0:
+            logging.warning(f"Could not update document with ID {audio_doc['userId']}")
+        return True
 
     def get_gfile(self, file_id: str):
         file_request = self.gdrive.drive.files().get_media(fileId=file_id)
@@ -130,8 +138,8 @@ class QuizzrServer:
             print("Download %d%%." % int(status.progress() * 100))
         return fh
 
-    def get_submission_name(self):
-        return str(self.queue_id_gen.get_next())
+    def get_next_submission_name(self):
+        return str(datetime.now().strftime("%Y.%m.%d %H.%M.%S.%f"))
 
     @staticmethod
     def get_ids(collection):
@@ -232,8 +240,11 @@ def processed_audio():
     arguments_batch = request.get_json()
     arguments_list = arguments_batch["arguments"]
     logging.info(f"Updating data relating to {len(arguments_list)} audio documents...")
+    success_count = 0
     for arguments in arguments_list:
-        qs.update_processed_audio(arguments)
+        success = qs.update_processed_audio(arguments)
+        success_count += int(success)  # Add on success, don't add on fail
+
     logging.info("Successfully updated data")
     return {"msg": "proc_audio.update_success"}
 
@@ -248,11 +259,21 @@ def send_gfile(gfile_id):
 def select_record_question():
     if not qs.unrec_question_ids:
         logging.error("No unrecorded questions found. Aborting")
-        return {"err": "unrec_not_found"}
-    next_question_id = random.choice(qs.unrec_question_ids)
-    logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id}")
-    next_question = qs.unrec_questions.find_one({"_id": next_question_id})
-    logging.debug(f"next_question = {next_question}")
+        return {"err": "unrec_empty_qids"}
+    question_ids_list = qs.unrec_question_ids.copy()
+    while True:
+        next_question_id = random.choice(question_ids_list)
+        next_question = qs.unrec_questions.find_one({"_id": next_question_id})
+        logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id}")
+        logging.debug(f"next_question = {next_question}")
+        if next_question and next_question.get("transcript"):
+            break
+        if not question_ids_list:
+            logging.error("Failed to find a viable unrecorded question. Aborting")
+            return {"err": "unrec_corrupt_questions"}
+        logging.warning(f"ID {next_question_id} is invalid or associated question has no transcript")
+        question_ids_list.remove(next_question_id)
+
     result = next_question["transcript"]
     return {"transcript": result, "id": str(next_question_id)}
 
@@ -273,14 +294,29 @@ def recording_listener():
         return render_template("submission.html", status="err", err="empty_uids")
 
     # question_id = random.choice(qids)
-    question_id = request.form["qid"]
-    user_id = random.choice(qs.user_ids)
+    question_id, success = error_handling.to_oid_soft(request.form.get("qid"))
+    if question_id is None:
+        logging.warning("Form argument 'qid' is undefined")
+    elif not success:
+        logging.warning("Form argument 'qid' is not a valid ObjectId")
+
+    user_ids = qs.user_ids.copy()
+    while True:
+        user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
+        if success:
+            break
+        if not user_ids:
+            logging.warning("Could not find properly formed user IDs. Proceeding with last choice")
+            break
+        logging.warning(f"Found malformed user ID {user_id}. Retrying...")
+        user_ids.remove(user_id)
+
     logging.debug(f"question_id = {question_id}")
     logging.debug(f"user_id = {user_id}")
 
     submission_name = qs.save_recording(recording, {
-        "questionId": bson.ObjectId(question_id),
-        "userId": bson.ObjectId(user_id)
+        "questionId": question_id,
+        "userId": user_id
     })
     logging.debug(f"submission_name = {submission_name}")
     accepted_submissions = qs.processor.pick_submissions(rec_processing.QuizzrWatcher.queue_submissions(qs.REC_DIR))

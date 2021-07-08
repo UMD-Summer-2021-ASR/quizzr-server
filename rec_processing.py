@@ -44,10 +44,11 @@ class QuizzrWatcher:
 
     @staticmethod
     def queue_submissions(directory: str):
+        # TODO: Add queue size limit.
         found_files = os.listdir(directory)
         queued_submissions = set()
         for found_file in found_files:
-            submission_name = found_file.split(".")[0]
+            submission_name = os.path.splitext(found_file)[0]
             queued_submissions.add(submission_name)
         return queued_submissions
 
@@ -56,6 +57,7 @@ class QuizzrProcessor:
     def __init__(self, database, directory: str, version: str, secret_directory: str, gdrive):
         self.VERSION = version
         self.DIRECTORY = directory
+        self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
         self.rec_questions = database.RecordedQuestions
@@ -67,7 +69,6 @@ class QuizzrProcessor:
 
         self.punc_regex = re.compile(r"[.?!,;:\"\-]")
         self.whitespace_regex = re.compile(r"\s+")
-        self.RECOGNIZER_TYPE = "Gentle Forced Aligner"  # Easier to refactor.
         self.ACCURACY_CUTOFF = 0.5  # Hyperparameter
 
     # submissions do not have extensions
@@ -84,6 +85,9 @@ class QuizzrProcessor:
             else:
                 accepted_submissions.append(submission)
 
+        if not accepted_submissions:
+            logging.info("No submissions accepted. Skipping upload process")
+            return accepted_submissions
         logging.info(f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)")
 
         subs2gfids = self.gdrive_upload_many(accepted_submissions)
@@ -164,7 +168,11 @@ class QuizzrProcessor:
     def get_accuracy(self, file_path: str, r_transcript: str):
         total_words = len(self.process_transcript(r_transcript))
         total_aligned_words = 0
-        alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
+        try:
+            alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
+        except RuntimeError as e:
+            logging.error(f"Encountered a RuntimeError: {e}. Aborting")
+            return 0.0
         # alignment = {}
         words = alignment["words"]
         for word_data in words:
