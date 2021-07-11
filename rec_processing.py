@@ -1,7 +1,6 @@
 import atexit
 import logging
 import os
-import random
 import re
 import signal
 import sys
@@ -11,7 +10,6 @@ from typing import List, Dict, Any
 
 import bson.json_util
 import pymongo
-from bson import ObjectId
 from googleapiclient.http import MediaFileUpload
 
 import forced_alignment
@@ -44,10 +42,11 @@ class QuizzrWatcher:
 
     @staticmethod
     def queue_submissions(directory: str):
+        # TODO: Add queue size limit.
         found_files = os.listdir(directory)
         queued_submissions = set()
         for found_file in found_files:
-            submission_name = found_file.split(".")[0]
+            submission_name = os.path.splitext(found_file)[0]
             queued_submissions.add(submission_name)
         return queued_submissions
 
@@ -56,6 +55,7 @@ class QuizzrProcessor:
     def __init__(self, database, directory: str, version: str, secret_directory: str, gdrive):
         self.VERSION = version
         self.DIRECTORY = directory
+        self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
         self.rec_questions = database.RecordedQuestions
@@ -67,8 +67,8 @@ class QuizzrProcessor:
 
         self.punc_regex = re.compile(r"[.?!,;:\"\-]")
         self.whitespace_regex = re.compile(r"\s+")
-        self.RECOGNIZER_TYPE = "Gentle Forced Aligner"  # Easier to refactor.
         self.ACCURACY_CUTOFF = 0.5  # Hyperparameter
+        self.ERROR_ACCURACY = -1.0
 
     # submissions do not have extensions
     def pick_submissions(self, submissions: List[str]):
@@ -77,13 +77,19 @@ class QuizzrProcessor:
         logging.debug(f"sub2meta = {sub2meta}")
 
         accepted_submissions = []
+        error_submissions = []
         accuracies = self.preprocess_submissions(submissions, sub2meta)
         for submission in submissions:
             if accuracies[submission] < self.ACCURACY_CUTOFF:
+                if accuracies[submission] == self.ERROR_ACCURACY:
+                    error_submissions.append(submission)
                 self.delete_submission(submission)
             else:
                 accepted_submissions.append(submission)
 
+        if not accepted_submissions:
+            logging.info("No submissions accepted. Skipping upload process")
+            return accepted_submissions, error_submissions
         logging.info(f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)")
 
         subs2gfids = self.gdrive_upload_many(accepted_submissions)
@@ -91,7 +97,7 @@ class QuizzrProcessor:
         self.mongodb_insert_submissions(subs2gfids, sub2meta)
         for submission in accepted_submissions:
             self.delete_submission(submission)
-        return accepted_submissions
+        return accepted_submissions, error_submissions
 
     def preprocess_submissions(self, submissions: List[str], sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, float]:
         # TODO: Make into batches if possible.
@@ -103,15 +109,34 @@ class QuizzrProcessor:
             file_path = os.path.join(self.DIRECTORY, submission)
             wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
-            qid = sub2meta[submission]["questionId"]
+            if sub2meta.get(submission) is None:
+                logging.error(f"Metadata for submission {submission} not found. Skipping")
+                results[submission] = self.ERROR_ACCURACY
+                continue
+            qid = sub2meta[submission].get("questionId")
+            if qid is None:
+                logging.error(f"Question ID for submission {submission} not found. Skipping")
+                results[submission] = self.ERROR_ACCURACY
+                continue
+
             logging.debug(f"{type(qid)} qid = {qid}")
             logging.debug("Finding question in UnrecordedQuestions...")
-            question = self.unrec_questions.find_one({"_id": sub2meta[submission]["questionId"]}, {"transcript": 1})
+            question = self.unrec_questions.find_one({"_id": qid}, {"transcript": 1})
             if question is None:
                 logging.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
-                question = self.rec_questions.find_one({"_id": sub2meta[submission]["questionId"]}, {"transcript": 1})
+                question = self.rec_questions.find_one({"_id": qid}, {"transcript": 1})
 
-            r_transcript = question["transcript"]
+            if question is None:
+                logging.error("Question not found. Skipping submission")
+                results[submission] = self.ERROR_ACCURACY
+                continue
+
+            r_transcript = question.get("transcript")
+
+            if r_transcript is None:
+                logging.error("Transcript not found. Skipping submission")
+                results[submission] = self.ERROR_ACCURACY
+                continue
 
             accuracy = self.get_accuracy(wav_file_path, r_transcript)
             # accuracy = self.ACCURACY_CUTOFF
@@ -125,6 +150,7 @@ class QuizzrProcessor:
         return results
 
     def gdrive_upload_many(self, submissions: List[str]) -> Dict[str, str]:
+        # TODO: Actual BrokenPipeError handling
         subs2gfids = {}
         if self.gdrive.creds.expired:
             self.gdrive.refresh()
@@ -150,6 +176,9 @@ class QuizzrProcessor:
             entry = {"_id": subs2gfids[submission], "version": self.VERSION}
             entry.update(sub2meta[submission])
             mongodb_insert_batch.append(entry)
+        if not mongodb_insert_batch:
+            logging.warning("No documents to insert. Skipping")
+            return
         results = self.unproc_audio.insert_many(mongodb_insert_batch)
         logging.info(f"Inserted {len(results.inserted_ids)} document(s) into the UnprocessedAudio collection")
         return results
@@ -164,7 +193,11 @@ class QuizzrProcessor:
     def get_accuracy(self, file_path: str, r_transcript: str):
         total_words = len(self.process_transcript(r_transcript))
         total_aligned_words = 0
-        alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
+        try:
+            alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
+        except RuntimeError as e:
+            logging.error(f"Encountered RuntimeError: {e}. Aborting")
+            return self.ERROR_ACCURACY
         # alignment = {}
         words = alignment["words"]
         for word_data in words:
@@ -180,6 +213,8 @@ class QuizzrProcessor:
         sub2meta = {}
         for submission in submissions:
             file_path = os.path.join(self.DIRECTORY, submission)
+            if not os.path.exists(file_path):
+                continue
             with open(file_path + ".json", "r") as meta_f:
                 sub2meta[submission] = bson.json_util.loads(meta_f.read())
         return sub2meta

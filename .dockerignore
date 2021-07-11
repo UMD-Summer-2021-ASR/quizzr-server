@@ -138,8 +138,4 @@ dmypy.json
 cython_debug/
 
 privatedata/
-privatedatabackup/
-unused/
 .gitignore
-server_test.py
-forced_alignment_test.py
