@@ -1,14 +1,12 @@
 import logging
 import gentle
 import multiprocessing
-import json
 '''
 Created on Apr 30, 2021
 
 @author: Christopher Rapp
 Dependencies:
 * gentle
-* playsound
 
 Coded and tested in Python 3.7.10
 '''
@@ -38,9 +36,9 @@ THE SOFTWARE.
 '''
 
 
-def get_forced_alignment(speech_file: str, transcript: str):
-    def on_progress(p): # align.py stuff
-        for k,v in p.items():
+def get_forced_alignment(speech_file: str, transcript: str) -> gentle.Transcription:
+    def on_progress(p):  # align.py stuff
+        for k, v in p.items():
             logging.debug("%s: %s" % (k, v))
 
     # Currently, this function uses Gentle and bases its code on a modified version of align.py, which is in Gentle's
@@ -48,18 +46,18 @@ def get_forced_alignment(speech_file: str, transcript: str):
     nthreads = multiprocessing.cpu_count()
     disfluency = False
     conservative = False
-    disfluencies = set(['uh', 'um'])
+    disfluencies = {'uh', 'um'}
 
     logging.info("Retrieving forced alignment...")
 
     resources = gentle.Resources()
 
-    logging.info("Converting audio to 8K sampled wav...") # align.py step
+    logging.info("Converting audio to 8K sampled wav...")  # align.py step
 
     with gentle.resampled(speech_file) as wav_file:
-        logging.info("Starting alignment...") # align.py step
+        logging.info("Starting alignment...")  # align.py step
         aligner = gentle.ForcedAligner(resources, transcript, nthreads=nthreads, disfluency=disfluency,
                                        conservative=conservative, disfluences=disfluencies)
         result = aligner.transcribe(wav_file, progress_cb=on_progress, logging=logging)
 
-    return json.loads(result.to_json(indent=2))
+    return result

@@ -3,23 +3,25 @@ import logging
 import os
 import re
 import signal
+
+import gentle
 import sys
 import time
 from datetime import datetime
 from typing import List, Dict, Any
 
 import bson.json_util
-import pymongo
 from googleapiclient.http import MediaFileUpload
 
 import forced_alignment
-import gdrive_authentication
+import vtt_conversion
 
 
 class QuizzrWatcher:
-    def __init__(self, watch_dir, func, interval=2):
+    def __init__(self, watch_dir, func, interval=2, queue_size_limit=32):
         self.done = False
         self.watch_dir = watch_dir
+        self.queue_size_limit = queue_size_limit
         self.func = func
         self.interval = interval
         atexit.register(self.exit_handler)
@@ -33,28 +35,32 @@ class QuizzrWatcher:
 
     def execute(self):
         while not self.done:
-            queued_submissions = self.queue_submissions(self.watch_dir)
+            queued_submissions = self.queue_submissions(self.watch_dir, self.queue_size_limit)
             if queued_submissions:
                 self.func(queued_submissions)
             time.sleep(self.interval)
 
         sys.exit(0)
 
+    # Return a list of submission names. Submissions have a WAV file and an associated JSON metadata file.
     @staticmethod
-    def queue_submissions(directory: str):
+    def queue_submissions(directory: str, size_limit: int = None):
         # TODO: Add queue size limit.
         found_files = os.listdir(directory)
         queued_submissions = set()
-        for found_file in found_files:
+        for i, found_file in enumerate(found_files):
+            if size_limit and i > size_limit:
+                break
             submission_name = os.path.splitext(found_file)[0]
             queued_submissions.add(submission_name)
         return queued_submissions
 
 
 class QuizzrProcessor:
-    def __init__(self, database, directory: str, version: str, secret_directory: str, gdrive):
+    def __init__(self, database, directory: str, version: str, gdrive):
         self.VERSION = version
         self.DIRECTORY = directory
+        self.SUBMISSION_FILE_TYPES = ["wav", "json", "vtt"]
         self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
@@ -70,56 +76,62 @@ class QuizzrProcessor:
         self.ACCURACY_CUTOFF = 0.5  # Hyperparameter
         self.ERROR_ACCURACY = -1.0
 
-    # submissions do not have extensions
+    # Pre-screen all given submissions and upload the ones that passed the pre-screening.
     def pick_submissions(self, submissions: List[str]):
         logging.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
-        logging.debug(f"sub2meta = {sub2meta}")
+        logging.debug(f"sub2meta = {sub2meta!r}")
 
         accepted_submissions = []
-        error_submissions = []
-        accuracies = self.preprocess_submissions(submissions, sub2meta)
+        errors = {}
+        results = self.preprocess_submissions(submissions, sub2meta)
         for submission in submissions:
-            if accuracies[submission] < self.ACCURACY_CUTOFF:
-                if accuracies[submission] == self.ERROR_ACCURACY:
-                    error_submissions.append(submission)
+            err = results[submission].get("err")
+            if err:
+                errors[submission] = err
+                continue
+            if results[submission]["accuracy"] < self.ACCURACY_CUTOFF:
                 self.delete_submission(submission)
             else:
                 accepted_submissions.append(submission)
 
         if not accepted_submissions:
             logging.info("No submissions accepted. Skipping upload process")
-            return accepted_submissions, error_submissions
+            return accepted_submissions, errors
         logging.info(f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)")
 
-        subs2gfids = self.gdrive_upload_many(accepted_submissions)
-        logging.debug(f"subs2gfids = {subs2gfids}")
-        self.mongodb_insert_submissions(subs2gfids, sub2meta)
+        sub2gfid = self.gdrive_upload_many(accepted_submissions)
+        logging.debug(f"sub2gfid = {sub2gfid!r}")
+        self.mongodb_insert_submissions(sub2gfid, sub2meta, results)
         for submission in accepted_submissions:
             self.delete_submission(submission)
-        return accepted_submissions, error_submissions
+        return accepted_submissions, errors
 
-    def preprocess_submissions(self, submissions: List[str], sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, float]:
+    # Return the accuracy and VTT data of each submission.
+    def preprocess_submissions(self,
+                               submissions: List[str],
+                               sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, float]]:
         # TODO: Make into batches if possible.
         logging.info(f"Evaluating {len(submissions)} submission(s)...")
 
         num_finished_submissions = 0
         results = {}
         for submission in submissions:
+            results[submission] = {}
             file_path = os.path.join(self.DIRECTORY, submission)
             wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
             if sub2meta.get(submission) is None:
                 logging.error(f"Metadata for submission {submission} not found. Skipping")
-                results[submission] = self.ERROR_ACCURACY
+                results[submission]["err"] = "meta_not_found"
                 continue
             qid = sub2meta[submission].get("questionId")
             if qid is None:
                 logging.error(f"Question ID for submission {submission} not found. Skipping")
-                results[submission] = self.ERROR_ACCURACY
+                results[submission]["err"] = "qid_not_found"
                 continue
 
-            logging.debug(f"{type(qid)} qid = {qid}")
+            logging.debug(f"{type(qid)} qid = {qid!r}")
             logging.debug("Finding question in UnrecordedQuestions...")
             question = self.unrec_questions.find_one({"_id": qid}, {"transcript": 1})
             if question is None:
@@ -128,17 +140,17 @@ class QuizzrProcessor:
 
             if question is None:
                 logging.error("Question not found. Skipping submission")
-                results[submission] = self.ERROR_ACCURACY
+                results[submission]["err"] = "question_not_found"
                 continue
 
             r_transcript = question.get("transcript")
 
             if r_transcript is None:
                 logging.error("Transcript not found. Skipping submission")
-                results[submission] = self.ERROR_ACCURACY
+                results[submission]["err"] = "transcript_not_found"
                 continue
 
-            accuracy = self.get_accuracy(wav_file_path, r_transcript)
+            accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
             # accuracy = self.ACCURACY_CUTOFF
             # accuracy = random.random()
 
@@ -146,12 +158,14 @@ class QuizzrProcessor:
 
             logging.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
             logging.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
-            results[submission] = accuracy
+            results[submission]["accuracy"] = accuracy
+            results[submission]["vtt"] = vtt
         return results
 
+    # Upload multiple submissions to Google Drive.
     def gdrive_upload_many(self, submissions: List[str]) -> Dict[str, str]:
         # TODO: Actual BrokenPipeError handling
-        subs2gfids = {}
+        sub2gfid = {}
         if self.gdrive.creds.expired:
             self.gdrive.refresh()
 
@@ -164,16 +178,22 @@ class QuizzrProcessor:
             media = MediaFileUpload(wav_file_path, mimetype="audio/wav")
             gfile = self.gdrive.drive.files().create(body=file_metadata, media_body=media, fields="id").execute()
             gfile_id = gfile.get("id")
+            sub2gfid[submission] = gfile_id
+        return sub2gfid
 
-            permission = {"type": "anyone", "role": "reader"}
-            self.gdrive.drive.permissions().create(fileId=gfile_id, body=permission, fields="id").execute()
-            subs2gfids[submission] = gfile_id
-        return subs2gfids
-
-    def mongodb_insert_submissions(self, subs2gfids: Dict[str, str], sub2meta: Dict[str, Dict[str, Any]]):
+    # Upload submission metadata to MongoDB.
+    def mongodb_insert_submissions(
+            self,
+            sub2gfid: Dict[str, str],
+            sub2meta: Dict[str, Dict[str, Any]],
+            processing_results):
         mongodb_insert_batch = []
-        for submission in subs2gfids.keys():
-            entry = {"_id": subs2gfids[submission], "version": self.VERSION}
+        for submission in sub2gfid.keys():
+            entry = {
+                "_id": sub2gfid[submission],
+                "version": self.VERSION,
+                "gentleVtt": processing_results[submission]["vtt"]
+            }
             entry.update(sub2meta[submission])
             mongodb_insert_batch.append(entry)
         if not mongodb_insert_batch:
@@ -183,14 +203,18 @@ class QuizzrProcessor:
         logging.info(f"Inserted {len(results.inserted_ids)} document(s) into the UnprocessedAudio collection")
         return results
 
-    # Helper methods
+    # ****************** HELPER METHODS *********************
+    # Remove a submission from disk.
     def delete_submission(self, submission_name):
         # TODO: Make it find all files with submission_name instead.
         submission_path = os.path.join(self.DIRECTORY, submission_name)
-        os.remove(submission_path + ".wav")
-        os.remove(submission_path + ".json")
+        for ext in self.SUBMISSION_FILE_TYPES:
+            file_path = ".".join([submission_path, ext])
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
-    def get_accuracy(self, file_path: str, r_transcript: str):
+    # Do a forced alignment and return the percentage of words aligned along with the VTT.
+    def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
         total_words = len(self.process_transcript(r_transcript))
         total_aligned_words = 0
         try:
@@ -198,24 +222,26 @@ class QuizzrProcessor:
         except RuntimeError as e:
             logging.error(f"Encountered RuntimeError: {e}. Aborting")
             return self.ERROR_ACCURACY
-        # alignment = {}
-        words = alignment["words"]
+        words = alignment.words
         for word_data in words:
-            if word_data["case"] == "success":
+            if word_data.case == "success":
                 total_aligned_words += 1
+        vtt = vtt_conversion.gentle_alignment_to_vtt(words)
 
-        return total_aligned_words / total_words
+        return total_aligned_words / total_words, vtt
 
+    # Return a list of words without punctuation or capitalization from a transcript.
     def process_transcript(self, t: str) -> List[str]:
         return re.split(self.whitespace_regex, re.sub(self.punc_regex, " ", t).lower())
 
+    # Return the metadata of each submission (a JSON file) if available.
     def get_metadata(self, submissions: List[str]) -> Dict[str, Dict[str, str]]:
         sub2meta = {}
         for submission in submissions:
-            file_path = os.path.join(self.DIRECTORY, submission)
-            if not os.path.exists(file_path):
+            submission_path = os.path.join(self.DIRECTORY, submission)
+            if not os.path.exists(submission_path + ".json"):
                 continue
-            with open(file_path + ".json", "r") as meta_f:
+            with open(submission_path + ".json", "r") as meta_f:
                 sub2meta[submission] = bson.json_util.loads(meta_f.read())
         return sub2meta
 
@@ -283,16 +309,3 @@ class QuizzrProcessor:
         self.rec_questions.insert_many(found_unrec_questions)
         self.rec_questions.bulk_write(q_batch)
         self.users.bulk_write(u_batch)"""
-
-
-if __name__ == "__main__":
-    SERVER_DIR = os.path.dirname(__file__)
-    SECRET_DATA_DIR = os.path.join(SERVER_DIR, "privatedata")
-    REC_DIR = os.path.join(SERVER_DIR, "recordings")
-    with open(os.path.join(SECRET_DATA_DIR, "connectionstring")) as f:
-        mongodb_client = pymongo.MongoClient(f.read())
-    gdrive = gdrive_authentication.GDriveAuth(SECRET_DATA_DIR)
-    processor = QuizzrProcessor(mongodb_client.QuizzrDatabase, REC_DIR, "D_0.0.0", SECRET_DATA_DIR, gdrive)
-    # processor = QuizzrProcessor(None, REC_DIR, "D_0.0.0", SECRET_DATA_DIR)
-    watcher = QuizzrWatcher(REC_DIR, processor.pick_submissions)
-    watcher.execute()
