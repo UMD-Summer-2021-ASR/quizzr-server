@@ -1,0 +1,418 @@
+openapi: 3.1.0
+info:
+  title: backend
+  version: '1.0'
+servers:
+  - url: 'http://localhost:3000'
+  - url: 'https://quizzr.stoplight.io'
+    description: a
+paths:
+  /answer:
+    get:
+      summary: Get Recorded Question
+      tags: []
+      responses:
+        '200':
+          description: Question Found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/GFileID'
+                  vtt:
+                    $ref: '#/components/schemas/VTT'
+                required:
+                  - id
+                  - vtt
+        '404':
+          description: Question Not Found
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                description: ''
+                type: object
+                x-examples:
+                  example-1:
+                    err: rec_not_found
+                properties:
+                  err:
+                    type: string
+                    enum:
+                      - rec_not_found
+                required:
+                  - err
+      operationId: get-answer
+      description: Retrieve an audio file ID and its associated VTT from a recorded question.
+    parameters: []
+  /audio/processed:
+    post:
+      summary: Add Processed Audio Data
+      tags: []
+      responses:
+        '201':
+          description: Created
+          headers: {}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  successes:
+                    type: integer
+                  total:
+                    type: integer
+                  errors:
+                    $ref: '#/components/schemas/Errors'
+                required:
+                  - successes
+                  - total
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMsg'
+      operationId: post-audio-processed
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                arguments:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      _id:
+                        $ref: '#/components/schemas/GFileID'
+                      vtt:
+                        $ref: '#/components/schemas/VTT'
+                      score:
+                        type: object
+                        required:
+                          - wer
+                          - mer
+                          - wil
+                        properties:
+                          wer:
+                            type: number
+                            description: Word Error Rate
+                          mer:
+                            type: number
+                            description: Match Error Rate
+                          wil:
+                            type: number
+                            description: Word Information Lost
+                      batchNumber:
+                        type: string
+                      metadata:
+                        type: string
+                    required:
+                      - _id
+                      - vtt
+                      - score
+                      - batchNumber
+                      - metadata
+              required:
+                - arguments
+        description: A batch of results from processing audio files.
+      description: Update a batch of audio files with results from processing them.
+  /audio/unprocessed:
+    parameters: []
+    get:
+      summary: Get Unprocessed Audio Batch
+      tags: []
+      responses:
+        '200':
+          description: Document Batch Found
+          content:
+            application/json:
+              schema:
+                description: ''
+                type: object
+                x-examples:
+                  example-1:
+                    results:
+                      - _id: 1l77laMyEVIit3_AP7v_YQBxe9RQvJ4zT
+                        transcript: The quick brown fox jumps over the lazy dog.
+                      - _id: 1IirF6ac4p-_A7zyXuDWYIzWpNUUjKbt1
+                        transcript: Hello world.
+                properties:
+                  results:
+                    type: array
+                    uniqueItems: true
+                    minItems: 1
+                    items:
+                      type: object
+                      properties:
+                        _id:
+                          minLength: 1
+                          type: string
+                        transcript:
+                          type: string
+                          minLength: 1
+                        diarMetadata:
+                          type: string
+                      required:
+                        - _id
+                        - transcript
+                  errors:
+                    $ref: '#/components/schemas/Errors'
+                required:
+                  - results
+              examples:
+                Sample Response:
+                  value:
+                    results:
+                      - _id: 1kjgKmxnvj758JhgsjLjY3_-jck9xLbV1
+                        transcript: The quick brown fox jumps over the lazy dog.
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMsg'
+      operationId: get-unprocessed-audio
+      description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
+  '/download/{gfile_id}':
+    parameters:
+      - $ref: '#/components/parameters/GFileID'
+    get:
+      summary: Get Recording
+      tags: []
+      responses:
+        '200':
+          description: Recording Found
+          content:
+            application/ogg:
+              schema:
+                type: object
+                properties: {}
+          headers: {}
+        '404':
+          description: Not Found
+      operationId: get-download-gfile_id
+      description: Retrieve an audio file from Google Drive.
+  '/record/{difficulty}':
+    get:
+      summary: Get Question and Transcript
+      tags: []
+      responses:
+        '200':
+          description: Question Found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Str-ObjectId'
+                  transcript:
+                    type: string
+                required:
+                  - id
+                  - transcript
+        '404':
+          description: Question Not Found
+      operationId: get-record
+      description: Retrieve a question ID and its associated transcript
+      parameters:
+        - schema:
+            type: integer
+          in: query
+          name: batchSize
+    parameters:
+      - schema:
+          type: number
+        name: difficulty
+        in: path
+        description: A float where easier difficulties have lower values.
+        required: true
+  /upload:
+    post:
+      summary: Submit Recording
+      tags: []
+      responses:
+        '202':
+          description: Upload Successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prescreenSuccessful:
+                    type: boolean
+                required:
+                  - prescreenSuccessful
+              examples: {}
+          headers: {}
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMsg'
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                description: ''
+                type: object
+                x-examples:
+                  example-1:
+                    err: empty_uids
+                properties:
+                  err:
+                    type: string
+                    enum:
+                      - empty_uids
+                      - prescreen_error
+                required:
+                  - err
+      operationId: post-upload
+      parameters: []
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                audio:
+                  $ref: '#/components/schemas/File'
+                qid:
+                  $ref: '#/components/schemas/Str-ObjectId'
+                diarMetadata:
+                  type: string
+              required:
+                - audio
+                - qid
+            examples:
+              example-1:
+                value:
+                  audio: {}
+                  qid: 81d04b85a09490e12cde7bfc
+        description: The file to upload along with some transaction information.
+      description: Pre-screen the given audio file for how accurately it matches to the given question's transcript and upload it to the database if it is accurate enough.
+  /upload/question:
+    post:
+      summary: Upload Question Batch
+      tags: []
+      responses:
+        '201':
+          description: Created
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMsg'
+        '500':
+          description: Internal Server Error
+      operationId: post-upload-question
+      description: Upload a batch of unrecorded questions.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                arguments:
+                  type: array
+                  uniqueItems: true
+                  items:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      transcript:
+                        type: string
+                      answer:
+                        type: string
+                    required:
+                      - transcript
+                      - answer
+              required:
+                - arguments
+        description: A batch of unrecorded question documents.
+components:
+  schemas:
+    ObjectId:
+      type: object
+      title: ObjectId
+      description: ObjectId from BSON
+      minProperties: 1
+      maxProperties: 1
+      properties:
+        $oid:
+          type: string
+          minLength: 24
+          maxLength: 24
+          pattern: '^[0-9a-f]+'
+      required:
+        - $oid
+    Str-ObjectId:
+      type: string
+      title: Str-ObjectId
+      minLength: 24
+      maxLength: 24
+      pattern: '^[0-9a-f]+'
+      description: String representation of an ObjectId
+    File:
+      title: File
+      type: object
+      description: ''
+    GFileID:
+      type: string
+      title: GFileID
+      description: ID for a Google Drive File
+      maxLength: 33
+      minLength: 33
+      pattern: '^1[A-Za-z0-9\-_]+'
+    VTT:
+      title: VTT
+      type: string
+      description: The contents of a VTT file
+    ErrorMsg:
+      title: Error
+      type: string
+      description: A machine-readable error message
+    Errors:
+      title: Errors
+      type: array
+      description: A list of error messages to send to the end user
+      items:
+        type: object
+        properties:
+          type:
+            type: string
+            enum:
+              - bad_request
+              - internal_error
+          reason:
+            type: string
+        required:
+          - type
+          - reason
+  parameters:
+    GFileID:
+      name: gfile_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^1[A-Za-z0-9\-_]+'
+        minLength: 33
+        maxLength: 33
+      description: The ID of a file in Google Drive
+    Warning:
+      name: Warning
+      in: header
+      schema:
+        type: string
+      description: A warning message
+  responses: {}
