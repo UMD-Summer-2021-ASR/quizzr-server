@@ -2,6 +2,8 @@ openapi: 3.1.0
 info:
   title: backend
   version: '1.0'
+  summary: API for the Flask Server
+  description: ''
 servers:
   - url: 'http://localhost:3000'
   - url: 'https://quizzr.stoplight.io'
@@ -48,6 +50,30 @@ paths:
       operationId: get-answer
       description: Retrieve an audio file ID and its associated VTT from a recorded question.
     parameters: []
+  /answer/check:
+    get:
+      summary: Check an Answer
+      tags: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: boolean
+      operationId: get-answer-check
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: a
+          description: The answer to be checked
+        - schema:
+            type: string
+          in: query
+          name: qid
+          description: The ID of the question selected
+      description: Check if the user's answer matches the stored answer of the associated question.
   /audio/processed:
     post:
       summary: Add Processed Audio Data
