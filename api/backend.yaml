@@ -148,6 +148,8 @@ paths:
                 - arguments
         description: A batch of results from processing audio files.
       description: Update a batch of audio files with results from processing them.
+      parameters:
+        - $ref: '#/components/parameters/Internal-Auth-Token'
   /audio/unprocessed:
     parameters: []
     get:
@@ -205,6 +207,8 @@ paths:
                 $ref: '#/components/schemas/ErrorMsg'
       operationId: get-unprocessed-audio
       description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
+      parameters:
+        - $ref: '#/components/parameters/Internal-Auth-Token'
   '/download/{gfile_id}':
     parameters:
       - $ref: '#/components/parameters/GFileID'
@@ -252,6 +256,7 @@ paths:
             type: integer
           in: query
           name: batchSize
+          description: The number of questions to retrieve
     parameters:
       - schema:
           type: number
@@ -365,6 +370,8 @@ paths:
               required:
                 - arguments
         description: A batch of unrecorded question documents.
+      parameters:
+        - $ref: '#/components/parameters/Internal-Auth-Token'
 components:
   schemas:
     ObjectId:
@@ -435,10 +442,18 @@ components:
         minLength: 33
         maxLength: 33
       description: The ID of a file in Google Drive
-    Warning:
-      name: Warning
+    Auth-Token:
+      name: Authentication Token
       in: header
+      required: true
       schema:
         type: string
-      description: A warning message
+      description: An authentication token to use for requests made by a user
+    Internal-Auth-Token:
+      name: Internal-Auth-Token
+      in: header
+      required: false
+      schema:
+        type: string
+      description: An authentication token for requests between back-end components
   responses: {}
