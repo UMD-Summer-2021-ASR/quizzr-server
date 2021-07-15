@@ -7,11 +7,9 @@ import signal
 import gentle
 import sys
 import time
-from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Union
 
 import bson.json_util
-from googleapiclient.http import MediaFileUpload
 
 import forced_alignment
 import vtt_conversion
@@ -61,7 +59,7 @@ class QuizzrProcessor:
         self.VERSION = version
         self.DIRECTORY = directory
         self.SUBMISSION_FILE_TYPES = ["wav", "json", "vtt"]
-        self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
+        # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
         self.rec_questions = database.RecordedQuestions
@@ -77,40 +75,34 @@ class QuizzrProcessor:
         self.ERROR_ACCURACY = -1.0
 
     # Pre-screen all given submissions and upload the ones that passed the pre-screening.
-    def pick_submissions(self, submissions: List[str]):
+    def pick_submissions(self, submissions: List[str]) -> dict:
         logging.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
         logging.debug(f"sub2meta = {sub2meta!r}")
 
-        accepted_submissions = []
-        errors = {}
+        final_results = {}
+        num_accepted_submissions = 0
         results = self.preprocess_submissions(submissions, sub2meta)
         for submission in submissions:
-            err = results[submission].get("err")
-            if err:
-                errors[submission] = err
-                continue
-            if results[submission]["accuracy"] < self.ACCURACY_CUTOFF:
-                self.delete_submission(submission)
+            if "err" in results[submission]:
+                final_results[submission] = {"case": "err", "err": results[submission]["err"]}
+            elif results[submission]["accuracy"] < self.ACCURACY_CUTOFF:
+                final_results[submission] = {"case": "rejected"}
+                delete_submission(self.DIRECTORY, submission, self.SUBMISSION_FILE_TYPES)
             else:
-                accepted_submissions.append(submission)
-
-        if not accepted_submissions:
-            logging.info("No submissions accepted. Skipping upload process")
-            return accepted_submissions, errors
-        logging.info(f"Accepted {len(accepted_submissions)} of {len(submissions)} submission(s)")
-
-        sub2gfid = self.gdrive_upload_many(accepted_submissions)
-        logging.debug(f"sub2gfid = {sub2gfid!r}")
-        self.mongodb_insert_submissions(sub2gfid, sub2meta, results)
-        for submission in accepted_submissions:
-            self.delete_submission(submission)
-        return accepted_submissions, errors
+                final_results[submission] = {
+                    "case": "accepted",
+                    "vtt": results[submission]["vtt"],
+                    "metadata": sub2meta[submission]
+                }
+                num_accepted_submissions += 1
+        logging.info(f"Accepted {num_accepted_submissions} of {len(submissions)} submission(s)")
+        return final_results
 
     # Return the accuracy and VTT data of each submission.
     def preprocess_submissions(self,
                                submissions: List[str],
-                               sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, float]]:
+                               sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Union[float, str]]]:
         # TODO: Make into batches if possible.
         logging.info(f"Evaluating {len(submissions)} submission(s)...")
 
@@ -162,57 +154,7 @@ class QuizzrProcessor:
             results[submission]["vtt"] = vtt
         return results
 
-    # Upload multiple submissions to Google Drive.
-    def gdrive_upload_many(self, submissions: List[str]) -> Dict[str, str]:
-        # TODO: Actual BrokenPipeError handling
-        sub2gfid = {}
-        if self.gdrive.creds.expired:
-            self.gdrive.refresh()
-
-        # TODO: Convert to batch request
-        for submission in submissions:
-            file_path = os.path.join(self.DIRECTORY, submission)
-            wav_file_path = file_path + ".wav"
-
-            file_metadata = {"name": str(datetime.now()) + ".wav"}
-            media = MediaFileUpload(wav_file_path, mimetype="audio/wav")
-            gfile = self.gdrive.drive.files().create(body=file_metadata, media_body=media, fields="id").execute()
-            gfile_id = gfile.get("id")
-            sub2gfid[submission] = gfile_id
-        return sub2gfid
-
-    # Upload submission metadata to MongoDB.
-    def mongodb_insert_submissions(
-            self,
-            sub2gfid: Dict[str, str],
-            sub2meta: Dict[str, Dict[str, Any]],
-            processing_results):
-        mongodb_insert_batch = []
-        for submission in sub2gfid.keys():
-            entry = {
-                "_id": sub2gfid[submission],
-                "version": self.VERSION,
-                "gentleVtt": processing_results[submission]["vtt"]
-            }
-            entry.update(sub2meta[submission])
-            mongodb_insert_batch.append(entry)
-        if not mongodb_insert_batch:
-            logging.warning("No documents to insert. Skipping")
-            return
-        results = self.unproc_audio.insert_many(mongodb_insert_batch)
-        logging.info(f"Inserted {len(results.inserted_ids)} document(s) into the UnprocessedAudio collection")
-        return results
-
     # ****************** HELPER METHODS *********************
-    # Remove a submission from disk.
-    def delete_submission(self, submission_name):
-        # TODO: Make it find all files with submission_name instead.
-        submission_path = os.path.join(self.DIRECTORY, submission_name)
-        for ext in self.SUBMISSION_FILE_TYPES:
-            file_path = ".".join([submission_path, ext])
-            if os.path.exists(file_path):
-                os.remove(file_path)
-
     # Do a forced alignment and return the percentage of words aligned along with the VTT.
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
         total_words = len(self.process_transcript(r_transcript))
@@ -309,3 +251,13 @@ class QuizzrProcessor:
         self.rec_questions.insert_many(found_unrec_questions)
         self.rec_questions.bulk_write(q_batch)
         self.users.bulk_write(u_batch)"""
+
+
+# Remove a submission from disk.
+def delete_submission(directory, submission_name, file_types):
+    # TODO: Make it find all files with submission_name instead.
+    submission_path = os.path.join(directory, submission_name)
+    for ext in file_types:
+        file_path = ".".join([submission_path, ext])
+        if os.path.exists(file_path):
+            os.remove(file_path)
