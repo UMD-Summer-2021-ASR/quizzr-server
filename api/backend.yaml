@@ -228,7 +228,7 @@ paths:
           description: Not Found
       operationId: get-download-gfile_id
       description: Retrieve an audio file from Google Drive.
-  '/record/{difficulty}':
+  /record:
     get:
       summary: Get Question and Transcript
       tags: []
@@ -240,13 +240,22 @@ paths:
               schema:
                 type: object
                 properties:
-                  id:
-                    $ref: '#/components/schemas/Str-ObjectId'
-                  transcript:
-                    type: string
+                  results:
+                    type: array
+                    uniqueItems: true
+                    minItems: 1
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: '#/components/schemas/Str-ObjectId'
+                        transcript:
+                          type: string
+                      required:
+                        - id
+                        - transcript
                 required:
-                  - id
-                  - transcript
+                  - results
         '404':
           description: Question Not Found
       operationId: get-record
@@ -257,13 +266,14 @@ paths:
           in: query
           name: batchSize
           description: The number of questions to retrieve
-    parameters:
-      - schema:
-          type: number
-        name: difficulty
-        in: path
-        description: A float where easier difficulties have lower values.
-        required: true
+        - schema:
+            type: integer
+            minimum: 0
+            maximum: 2
+          in: query
+          name: difficultyType
+          description: A difficulty type in enumerated form. Higher numbers are more difficult.
+    parameters: []
   /upload:
     post:
       summary: Submit Recording
@@ -364,9 +374,12 @@ paths:
                         type: string
                       answer:
                         type: string
+                      recDifficulty:
+                        type: integer
                     required:
                       - transcript
                       - answer
+                      - recDifficulty
               required:
                 - arguments
         description: A batch of unrecorded question documents.
