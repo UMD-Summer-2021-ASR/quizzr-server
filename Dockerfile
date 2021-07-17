@@ -10,6 +10,7 @@ RUN apt-get update && \
         ffmpeg \
         unzip && \
     git clone https://github.com/lowerquality/gentle.git && \
+    pip install incremental && \
     cd gentle && ./install.sh && cd ..
 RUN cd quizzr-src && \
     pip install -r requirements.txt; \

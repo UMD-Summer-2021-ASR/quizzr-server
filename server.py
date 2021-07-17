@@ -22,20 +22,26 @@ logger = logging.getLogger(__name__)
 def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
     server_dir = os.path.dirname(__file__)
     rec_dir = os.path.join(server_dir, "recordings")
+    conf_path_default = os.path.join(server_dir, "sv_config_default.json")
     conf_path = os.path.join(server_dir, "sv_config.json")
     meta_path = os.path.join(server_dir, "metadata.json")
-    with open(conf_path, "r") as config_f, open(meta_path, "r") as meta_f:
+    with open(conf_path_default, "r") as default_config_f, open(conf_path, "r") as config_f, open(meta_path, "r") as meta_f:
+        default_config = json.load(default_config_f)
         config = json.load(config_f)
         meta = json.load(meta_f)
 
+    full_config = deepcopy(default_config)
+    full_config.update(config)
     if not env_name:
-        env_name = config["Q_ENV"]
-    app_conf = deepcopy(config["envs"][env_name])
+        env_name = full_config["Q_ENV"]
+    app_conf = deepcopy(full_config["envs"][env_name])
+    app_conf.update(full_config)  # Include other configuration variables
+    for var in app_conf:
+        if type(app_conf[var]) is not str and var in os.environ:
+            raise Exception(f"Cannot override non-string config parameter '{var}' through environment variable")
     app_conf.update(os.environ)
-    app_conf.update(config)  # Include other configuration variables
     app_conf["SERVER_DIR"] = server_dir
     app_conf["REC_DIR"] = rec_dir
-    app_conf["SUBMISSION_FILE_TYPES"] = ["wav", "json", "vtt"]  # Hardcoded for now.
     if env_overrides:
         app_conf.update(env_overrides)
 
@@ -48,8 +54,8 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
 
     # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
     @app.route("/answer/", methods=["GET"])
-    def select_answer_question():
-        question_ids = qtpm.get_ids(qtpm.rec_questions)
+    def pick_game_question():
+        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
         if not question_ids:
             logging.error("No recorded questions found. Aborting")
             return "rec_empty_qids", HTTPStatus.NOT_FOUND
@@ -73,15 +79,11 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
             if not question_ids:
                 logging.error("Failed to find a viable recorded question. Aborting")
                 return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-
-        # result = {"vtt": audio["vtt"], "gentleVtt": audio["gentleVtt"], "id": audio["_id"]}
-        # result = audio.copy()
-        # del result["score"]
         return audio
 
     # Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB Atlas.
     @app.route("/audio/unprocessed/", methods=["GET"])
-    def batch_unprocessed_audio():
+    def get_unprocessed_audio():
         max_docs = app.config["UNPROC_FIND_LIMIT"]
         errs = []
         results_projection = ["_id", "diarMetadata"]  # In addition to the transcript
@@ -139,7 +141,7 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
     # Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
     # Additionally, update the recording history of the associated questions and users.
     @app.route("/audio/processed", methods=["POST"])
-    def processed_audio():
+    def handle_processing_results():
         arguments_batch = request.get_json()
         arguments_list = arguments_batch.get("arguments")
         if arguments_list is None:
@@ -161,6 +163,7 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
         logging.info(f"Logged {len(errors)} warning messages")
         return results
 
+    # Check if an answer is correct.
     @app.route("/answer/check", methods=["GET"])
     def check_answer():
         qid = request.args.get("qid")
@@ -180,7 +183,7 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
 
     # Retrieve a file from Google Drive.
     @app.route("/download/<gfile_id>", methods=["GET"])
-    def send_gfile(gfile_id):
+    def retrieve_audio_file(gfile_id):
         if qtpm.gdrive.creds.expired:
             qtpm.gdrive.refresh()
         try:
@@ -190,34 +193,40 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
         return send_file(file_data, mimetype="audio/wav")
 
-    # Find a random unrecorded question and return the ID and transcript.
+    # Find a random unrecorded question (or multiple) and return the ID and transcript.
     @app.route("/record/", methods=["GET"])
-    def select_record_question():
-        question_ids = qtpm.get_ids(qtpm.unrec_questions)
+    def pick_recording_question():
+        difficulty = request.args.get("difficultyType")
+        batch_size = request.args.get("batchSize")
+        if difficulty is not None:
+            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], int(difficulty))
+            difficulty_query = {"recDifficulty": difficulty_query_op}
+        else:
+            difficulty_query = {}
+
+        question_ids = QuizzrTPM.get_ids(qtpm.unrec_questions, difficulty_query)
         if not question_ids:
-            logging.error("No unrecorded questions found. Aborting")
+            logging.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
-        # question_ids = qtpm.unrec_question_ids.copy()
-        while True:
-            next_question_id = random.choice(question_ids)
-            next_question = qtpm.unrec_questions.find_one({"_id": next_question_id})
-            logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            logging.debug(f"next_question = {next_question!r}")
-            if next_question and next_question.get("transcript"):
-                break
-            logging.warning(f"ID {next_question_id} is invalid or associated question has no transcript")
-            question_ids.remove(next_question_id)
-            if not question_ids:
-                logging.error("Failed to find a viable unrecorded question. Aborting")
+        errors = []
+        if batch_size is not None and int(batch_size) > 1:
+            next_questions, errors = qtpm.pick_random_questions(question_ids, int(batch_size))
+            if next_questions is None:
                 return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-
-        result = next_question["transcript"]
-        return {"transcript": result, "id": str(next_question_id)}
+            results = []
+            for doc in next_questions:
+                results.append({"transcript": doc["transcript"], "id": str(doc["_id"])})
+        else:
+            next_question = qtpm.pick_random_question(question_ids)
+            if next_question is None:
+                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+            results = [{"transcript": next_question["transcript"], "id": str(next_question["_id"])}]
+        return {"results": results, "errors": errors}
 
     # Submit a recording for pre-screening and upload it to the database if it passes.
     @app.route("/upload", methods=["POST"])
-    def recording_listener():
+    def pre_screen():
         recording = request.files.get("audio")
         question_id = request.form.get("qid")
         diarization_metadata = request.form.get("diarMetadata")
@@ -236,7 +245,7 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
             logging.error("Form argument 'qid' is not a valid ObjectId. Aborting")
             return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
 
-        user_ids = qtpm.get_ids(qtpm.users)
+        user_ids = QuizzrTPM.get_ids(qtpm.users)
         if not user_ids:
             logging.error("No user IDs found. Aborting")
             return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR

@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import os
+import random
 from copy import deepcopy
 from typing import Dict, Any, List
 
@@ -13,6 +14,7 @@ from pymongo.database import Database
 import gdrive_authentication
 
 
+# Consists of mostly helper methods.
 class QuizzrTPM:
     def __init__(self, database_name="QuizzrDatabase", g_folder_name="Recordings", server_dir=os.path.dirname(__file__), version="0.0.0", folder_id=None):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
@@ -177,7 +179,89 @@ class QuizzrTPM:
         logging.error("Failed to find a viable audio document")
         return
 
-    # Utility methods for automatically updating the cached ID list.
+    # Generator function for getting questions from both collections.
+    def find_questions(self, qids: list = None, **kwargs):
+        kwargs_c = deepcopy(kwargs)
+
+        # Overrides _id argument in filter.
+        if qids:
+            if "filter" not in kwargs_c:
+                kwargs_c["filter"] = {}
+            kwargs_c["filter"]["_id"] = {"$in": qids}
+
+        logging.info("Finding unrecorded questions...")
+        unrec_cursor = self.unrec_questions.find(**kwargs_c)
+        found_unrec_qids = []
+        for i, question in enumerate(unrec_cursor):
+            logging.debug(f"question {i} = {question!r}")
+            found_unrec_qids.append(question["_id"])
+            yield question
+        logging.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
+
+        if qids:
+            rec_qids = [qid for qid in qids if qid not in found_unrec_qids]
+            if not rec_qids:
+                logging.info("Found all questions. Skipping finding recorded questions")
+                return
+            kwargs_c["filter"]["_id"] = {"$in": rec_qids}
+            logging.info(f"Finding {len(rec_qids)} of {len(qids)} recorded question(s)...")
+        else:
+            logging.info("Finding recorded questions...")
+
+        rec_count = self.rec_questions.count_documents(**kwargs_c)
+        rec_cursor = self.rec_questions.find(**kwargs_c)
+        for i, question in enumerate(rec_cursor):
+            logging.debug(f"question {i} = {question!r}")
+            yield question
+        logging.info(f"Found {rec_count} recorded question(s)")
+
+    def pick_random_question(self, question_ids):
+        while question_ids:
+            next_question_id = random.choice(question_ids)
+            next_question = self.unrec_questions.find_one({"_id": next_question_id})
+            logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
+            logging.debug(f"next_question = {next_question!r}")
+            if next_question and "transcript" in next_question:
+                return next_question
+            logging.warning(f"ID {next_question_id} is invalid or associated question has no transcript")
+            question_ids.remove(next_question_id)
+        logging.error("Failed to find a viable unrecorded question. Aborting")
+
+    def pick_random_questions(self, question_ids, batch_size):
+        qids_pool = question_ids.copy()
+        random.shuffle(qids_pool)
+        next_batch_size = batch_size
+        questions = []
+        errors = []
+        while qids_pool:
+            if len(qids_pool) >= next_batch_size:
+                next_id_batch = qids_pool[:next_batch_size]
+                qids_pool = qids_pool[next_batch_size:]
+            else:
+                next_id_batch = qids_pool.copy()
+                qids_pool = []
+            logging.debug(f"next_id_batch = {next_id_batch!r}")
+            logging.debug(f"qids_pool = {qids_pool!r}")
+            questions_cursor = self.unrec_questions.find({"_id": {"$in": next_id_batch}})
+            for doc in questions_cursor:
+                logging.debug(f"doc = {doc!r}")
+                if "transcript" in doc:
+                    questions.append(doc)
+                else:
+                    logging.warning("Question does not contain required field 'transcript'. Ignoring")
+                    errors.append((doc, "missing_transcript"))
+            next_batch_size -= len(questions)
+            if next_batch_size == 0:
+                logging.info("Found all questions requested. Returning results")
+                return questions, errors
+            logging.info(f"Found {len(questions)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
+        if not qids_pool:
+            logging.info("Could not find any more valid questions. Returning results")
+        if questions:
+            return questions, errors
+        logging.error("Failed to find any viable unrecorded questions. Aborting")
+
+    # Utility methods for automatically updating the cached ID list. Deprecated.
     def insert_unrec_question(self, *args, **kwargs):
         results = self.unrec_questions.insert_one(*args, **kwargs)
         self.unrec_question_ids.append(results.inserted_id)
@@ -217,42 +301,6 @@ class QuizzrTPM:
         results = self.rec_questions.delete_many(*args, **kwargs)
         self.rec_question_ids = self.get_ids(self.rec_questions)
         return results
-
-    # Generator function for getting questions from both collections.
-    def find_questions(self, qids: list = None, **kwargs):
-        kwargs_c = deepcopy(kwargs)
-
-        # Overrides _id argument in filter.
-        if qids:
-            if "filter" not in kwargs_c:
-                kwargs_c["filter"] = {}
-            kwargs_c["filter"]["_id"] = {"$in": qids}
-
-        logging.info("Finding unrecorded questions...")
-        unrec_cursor = self.unrec_questions.find(**kwargs_c)
-        found_unrec_qids = []
-        for i, question in enumerate(unrec_cursor):
-            logging.debug(f"question {i} = {question!r}")
-            found_unrec_qids.append(question["_id"])
-            yield question
-        logging.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
-
-        if qids:
-            rec_qids = [qid for qid in qids if qid not in found_unrec_qids]
-            if not rec_qids:
-                logging.info("Found all questions. Skipping finding recorded questions")
-                return
-            kwargs_c["filter"]["_id"] = {"$in": rec_qids}
-            logging.info(f"Finding {len(rec_qids)} of {len(qids)} recorded question(s)...")
-        else:
-            logging.info("Finding recorded questions...")
-
-        rec_count = self.rec_questions.count_documents(**kwargs_c)
-        rec_cursor = self.rec_questions.find(**kwargs_c)
-        for i, question in enumerate(rec_cursor):
-            logging.debug(f"question {i} = {question!r}")
-            yield question
-        logging.info(f"Found {rec_count} recorded question(s)")
 
     def create_g_folder(self, name, parents=None):
         file_metadata = {
@@ -312,3 +360,14 @@ class QuizzrTPM:
         for i, doc in enumerate(id_cursor):
             ids.append(doc["_id"])
         return ids
+
+    @staticmethod
+    def get_difficulty_query_op(difficulty_limits: list, difficulty):
+        lower_bound = difficulty_limits[difficulty - 1] + 1 if difficulty > 0 else None
+        upper_bound = difficulty_limits[difficulty]
+        query_op = {}
+        if lower_bound:
+            query_op["$gte"] = lower_bound
+        if upper_bound:
+            query_op["$lte"] = upper_bound
+        return query_op
