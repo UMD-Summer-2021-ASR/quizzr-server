@@ -1,7 +1,7 @@
-# Quizzr.io Back-end Core
+# Quizzr.io Data Flow Server
 
 ## Overview
-The Quizzr.io Back-end Core functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Google Drive to store audio files and the MongoDB Quizzr Atlas to store metadata. It is especially designed to work with the front-end portion of the Quizzr server. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
+The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Google Drive to store audio files and the MongoDB Quizzr Atlas to store metadata. It is especially designed to work with the front-end portion of the Quizzr server. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
 
 ## Installation
 Prior to installation, you will need to have `pip` installed.
@@ -30,9 +30,21 @@ You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 
 There is an option for running this server in debug mode. To do that, simply set `FLASK_ENV` to `development` in the terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.
+### Configuring the Server
+The `sv_config.json` file allows for modifying the configuration of the server. It is merged on top of the default configuration. All configuration fields must use purely capital letters to be recognized by the server. The following is a list of configuration fields and their descriptions:
+* `UNPROC_FIND_LIMIT` The maximum number of unprocessed audio documents to find in a single batch.
+* `REC_QUEUE_LIMIT` The maximum number of submissions to pre-screen at once.
+* `G_FOLDER` The name of the root folder to use in Google Drive.
+* `DATABASE` The name of the database to use in MongoDB.
+* `Q_ENV` The type of environment to use. It currently does not have much use outside of blocking certain pages.
+* `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
+* `DIFFICULTY_LIMITS` The upper bound of each difficulty, or `null` to have no upper bound.
+* `G_DIR_STRUCT` The structure of the root Google Drive folder. Use the "children" property to include sub-directories. Each sub-directory is defined by the key name and must have an object value. Leave the value of the sub-directory as a blank object to make it have no further sub-directories.
+* `VERSION` The version of the software. Used in audio document definitions for cases where the schema changes.
+It is also possible to override configuration fields through environment variables. Currently, this only works with fields that have string values.
 
 ### Testing
-There is a separate repository for running automated tests on the server. See the [quizzr-server-test](https://github.com/UMD-Summer-2021-ASR/quizzr-server-test) repository for more information.
+There is a separate repository for running automated tests on the server. See the [quizzr-server-test](https://github.com/UMD-Summer-2021-ASR/quizzr-server-test) repository for more information. \
 **Upload Handler:** Navigate to the page `/uploadtest/` and fill in the fields in the resulting GUI. You do not need to fill in the user ID field as of this version. Note that upon submitting, the contents of the atlas will be altered, and the server has no built-in way of reversing these changes. \
 **Question Selectors:** Navigate to the page `/recordquestion/` for questions to record or the `/answerquestion/` for questions to answer.
 Unprocessed Audio Batch Request: Navigate to the page `/audio/unprocessed/`. \
@@ -60,45 +72,4 @@ Notes:
 * You will need to have the `token.json` file in the location of the mounting point for `/quizzr-src/privatedata`.
 
 ## Endpoints
-Batch requests are noted accordingly in the headings of each endpoint. A `json` response from a `GET` batch request will always contain an array under the field `results`. The body of a batch request that accepts `json` must be an object containing the field `arguments`.
-
-### `/answer/` `GET`
-**`json` Response:** `String vtt` `String id` \
-**Error Responses:** "rec_not_found" \
-Retrieves the document of the processed audio document with the best evaluation of the ones listed in a
-randomly-selected, recorded question.
-
-### `/audio/unprocessed/` `GET` (Batch)
-**`json` Response (Batch Entry):** `String _id` `String transcript` \
-Retrieves a batch of at most 32 unprocessed audio documents, each including the ID of the audio document and the
-transcript (retrieved from the associated question document).
-
-### `/audio/processed` `POST` (Batch)
-**`json` Parameters (Batch Entry):** `String _id` `String vtt` `Object score` `String batchNumber` `String metadata` \
-**Response:** `{"msg": "proc_audio.update_success"}` \
-Moves the given unprocessed audio documents to the Audio collection with the given arguments attached. It also updates
-the associated questions and users to include the newly-processed audio documents in their respective fields. \
-Note: If any associated questions are in the UnrecordedQuestions collection, they are moved to the RecordedQuestions
-collection.
-
-### `/download/<gfile_id>` `GET`
-**URL Parameters:** `gfile_id` \
-**Response:** The contents of a file with `gfile_id` stored in Google Drive.
-
-### `/record/` `GET`
-**`json` Response:** `ObjectId id` `String transcript` \
-**Error Responses:** "unrec_not_found" \
-Retrieves the document of a randomly selected question from the UnrecordedQuestions collection.
-
-### `/upload` `POST`
-**`form` Parameters:** `File audio` `String qid` \
-**`JinjaTemplate` Response:** The result of the operation presented in a user-friendly format. \
-Pre-screens the given audio file for how accurately it matches to the given question's transcript. If it is
-accurate enough, the program will upload the audio file to Google Drive. It will also add an entry to the 
-UnprocessedAudio collection in the MongoDB Quizzr Atlas including the ID of the question it selected and the ID of a
-random user in the atlas.
-
-### `/upload/question` `POST` (Batch)
-**`json` Parameters (Batch Entry):** `String transcript` `String answer` \
-**Response:** `{"msg": "unrec_question.upload_success"}` \
-Uploads the questions given in `arguments` to the UnrecordedQuestions collection.
+All documentation for the endpoints has been moved to [api/backend.yaml](api/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.

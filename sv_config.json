@@ -1,20 +1,5 @@
 {
-  "envs": {
-    "production": {
-      "G_FOLDER": "Recordings",
-      "DATABASE": "QuizzrDatabase"
-    },
-    "development": {
-      "G_FOLDER": "RecordingsDev",
-      "DATABASE": "QuizzrDatabaseDev"
-    },
-    "testing": {
-      "G_FOLDER": "RecordingsTest",
-      "DATABASE": "QuizzrDatabaseTest"
-    }
-  },
-  "UNPROC_FIND_LIMIT": 32,
-  "REC_QUEUE_LIMIT": 32,
   "Q_ENV": "development",
-  "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"]
+  "G_FOLDER": "RecordingsDev",
+  "DATABASE": "QuizzrDatabaseDev"
 }

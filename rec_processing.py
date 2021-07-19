@@ -74,29 +74,40 @@ class QuizzrProcessor:
         self.ACCURACY_CUTOFF = 0.5  # Hyperparameter
         self.ERROR_ACCURACY = -1.0
 
-    # Pre-screen all given submissions and upload the ones that passed the pre-screening.
+    # Pre-screen all given normal submissions and return the ones that passed the pre-screening.
+    # Return buzz recordings immediately.
     def pick_submissions(self, submissions: List[str]) -> dict:
         logging.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
         logging.debug(f"sub2meta = {sub2meta!r}")
+        typed_submissions = QuizzrProcessor.categorize_submissions(submissions, sub2meta)
 
         final_results = {}
         num_accepted_submissions = 0
-        results = self.preprocess_submissions(submissions, sub2meta)
-        for submission in submissions:
-            if "err" in results[submission]:
-                final_results[submission] = {"case": "err", "err": results[submission]["err"]}
-            elif results[submission]["accuracy"] < self.ACCURACY_CUTOFF:
-                final_results[submission] = {"case": "rejected"}
-                delete_submission(self.DIRECTORY, submission, self.SUBMISSION_FILE_TYPES)
-            else:
+        if "normal" in typed_submissions:
+            results = self.preprocess_submissions(typed_submissions['normal'], sub2meta)
+            for submission in typed_submissions['normal']:
+                if "err" in results[submission]:
+                    final_results[submission] = {"case": "err", "err": results[submission]["err"]}
+                elif results[submission]["accuracy"] < self.ACCURACY_CUTOFF:
+                    final_results[submission] = {"case": "rejected"}
+                    delete_submission(self.DIRECTORY, submission, self.SUBMISSION_FILE_TYPES)
+                else:
+                    final_results[submission] = {
+                        "case": "accepted",
+                        "vtt": results[submission]["vtt"],
+                        "metadata": sub2meta[submission]
+                    }
+                    num_accepted_submissions += 1
+            logging.info(f"Accepted {num_accepted_submissions} of {len(typed_submissions['normal'])} submission(s)")
+
+        if "buzz" in typed_submissions:
+            for submission in typed_submissions["buzz"]:
                 final_results[submission] = {
                     "case": "accepted",
-                    "vtt": results[submission]["vtt"],
                     "metadata": sub2meta[submission]
                 }
-                num_accepted_submissions += 1
-        logging.info(f"Accepted {num_accepted_submissions} of {len(submissions)} submission(s)")
+            logging.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins.")
         return final_results
 
     # Return the accuracy and VTT data of each submission.
@@ -186,6 +197,16 @@ class QuizzrProcessor:
             with open(submission_path + ".json", "r") as meta_f:
                 sub2meta[submission] = bson.json_util.loads(meta_f.read())
         return sub2meta
+
+    @staticmethod
+    def categorize_submissions(submissions, sub2meta):
+        typed_submissions = {}
+        for submission in submissions:
+            submission_type = sub2meta[submission]["recType"]
+            if submission_type not in typed_submissions:
+                typed_submissions[submission_type] = []
+            typed_submissions[submission_type].append(submission)
+        return typed_submissions
 
     # Kept here for reference.
     """def process_submissions(self, directory: str, submissions: List[str]):

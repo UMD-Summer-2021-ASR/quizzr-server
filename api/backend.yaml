@@ -328,16 +328,33 @@ paths:
                   $ref: '#/components/schemas/File'
                 qid:
                   $ref: '#/components/schemas/Str-ObjectId'
+                recType:
+                  type: string
+                  enum:
+                    - normal
+                    - buzz
                 diarMetadata:
                   type: string
               required:
                 - audio
                 - qid
+                - recType
             examples:
-              example-1:
+              user-submission:
                 value:
                   audio: {}
                   qid: 81d04b85a09490e12cde7bfc
+                  recType: normal
+              admin-submission:
+                value:
+                  audio: {}
+                  qid: 81d04b85a09490e12cde7bfc
+                  recType: normal
+                  diarMetadata: detect_num_speakers=False, max_num_speakers=3
+              user-buzz-submission:
+                value:
+                  audio: {}
+                  recType: buzz
         description: The file to upload along with some transaction information.
       description: Pre-screen the given audio file for how accurately it matches to the given question's transcript and upload it to the database if it is accurate enough.
   /upload/question:

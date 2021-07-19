@@ -44,7 +44,7 @@ class GDriveAuth:
             with open(self.token_path, 'w') as token:
                 token.write(self.creds.to_json())
 
-        self.drive = build('drive', 'v3', credentials=self.creds)
+        self.service = build('drive', 'v3', credentials=self.creds)
 
     def refresh(self):
         self.creds.refresh(Request())

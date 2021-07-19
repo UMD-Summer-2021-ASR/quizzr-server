@@ -9,6 +9,7 @@ from http import HTTPStatus
 import bson.json_util
 from flask import Flask, request, render_template, send_file
 from flask_cors import CORS
+from werkzeug.exceptions import abort
 
 import error_handling
 import rec_processing
@@ -19,37 +20,31 @@ logger = logging.getLogger(__name__)
 
 
 # Flask app factory function
-def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
+def create_app(test_overrides=None):
     server_dir = os.path.dirname(__file__)
     rec_dir = os.path.join(server_dir, "recordings")
     conf_path_default = os.path.join(server_dir, "sv_config_default.json")
     conf_path = os.path.join(server_dir, "sv_config.json")
-    meta_path = os.path.join(server_dir, "metadata.json")
-    with open(conf_path_default, "r") as default_config_f, open(conf_path, "r") as config_f, open(meta_path, "r") as meta_f:
+    with open(conf_path_default, "r") as default_config_f, open(conf_path, "r") as config_f:
         default_config = json.load(default_config_f)
         config = json.load(config_f)
-        meta = json.load(meta_f)
 
-    full_config = deepcopy(default_config)
-    full_config.update(config)
-    if not env_name:
-        env_name = full_config["Q_ENV"]
-    app_conf = deepcopy(full_config["envs"][env_name])
-    app_conf.update(full_config)  # Include other configuration variables
+    app_conf = deepcopy(default_config)
+    app_conf.update(config)
     for var in app_conf:
         if type(app_conf[var]) is not str and var in os.environ:
-            raise Exception(f"Cannot override non-string config parameter '{var}' through environment variable")
+            raise Exception(f"Cannot override non-string config field '{var}' through environment variable")
     app_conf.update(os.environ)
     app_conf["SERVER_DIR"] = server_dir
     app_conf["REC_DIR"] = rec_dir
-    if env_overrides:
-        app_conf.update(env_overrides)
+    if test_overrides:
+        app_conf.update(test_overrides)
 
     app = Flask(__name__)
     app.config.from_mapping(app_conf)
     CORS(app)
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["G_FOLDER"], folder_id=app_conf.get("G_FOLDER_ID"))
-    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, meta["version"], qtpm.gdrive)
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["G_FOLDER"], app_conf["G_DIR_STRUCT"], app_conf["VERSION"])
+    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"], qtpm.gdrive)
     # TODO: multiprocessing
 
     # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
@@ -227,23 +222,37 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
     # Submit a recording for pre-screening and upload it to the database if it passes.
     @app.route("/upload", methods=["POST"])
     def pre_screen():
+        valid_rec_types = ["normal", "buzz"]
         recording = request.files.get("audio")
         question_id = request.form.get("qid")
         diarization_metadata = request.form.get("diarMetadata")
+        rec_type = request.form.get("recType")
 
         logging.debug(f"question_id = {question_id!r}")
         logging.debug(f"diarization_metadata = {diarization_metadata!r}")
+        logging.debug(f"rec_type = {rec_type!r}")
 
         if recording is None:
             logging.error("No audio recording defined. Aborting")
             return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
+
+        if rec_type is None:
+            logging.error("Form argument 'recType' is undefined. Aborting")
+            return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
+        elif rec_type not in valid_rec_types:
+            logging.error(f"Invalid rec type {rec_type!r}. Aborting")
+            return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
+        qid_required = rec_type != "buzz"
+        qid_used = qid_required or rec_type != "buzz"  # Redundant but for flexibility
+
         question_id, success = error_handling.to_oid_soft(question_id)
-        if question_id is None:
-            logging.error("Form argument 'qid' is undefined. Aborting")
-            return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
-        elif not success:
-            logging.error("Form argument 'qid' is not a valid ObjectId. Aborting")
-            return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
+        if qid_used:
+            if qid_required and question_id is None:
+                logging.error("Form argument 'qid' expected. Aborting")
+                return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+            if not success:
+                logging.error("Form argument 'qid' is not a valid ObjectId. Aborting")
+                return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
 
         user_ids = QuizzrTPM.get_ids(qtpm.users)
         if not user_ids:
@@ -262,11 +271,13 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
         logging.debug(f"user_id = {user_id!r}")
 
         metadata = {
-            "questionId": question_id,
+            "recType": rec_type,
             "userId": user_id
         }
         if diarization_metadata:
             metadata["diarMetadata"] = diarization_metadata
+        if question_id:
+            metadata["questionId"] = question_id
 
         submission_name = _save_recording(rec_dir, recording, metadata)
         logging.debug(f"submission_name = {submission_name!r}")
@@ -282,25 +293,40 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
         # Upload files
-        file_paths = [os.path.join(app.config["REC_DIR"], submission) + ".wav" for submission in results]
+        normal_file_paths = []
+        buzz_file_paths = []
+        buzz_submissions = []
+        for submission in results:
+            file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
+            if results[submission]["case"] == "accepted":
+                if results[submission]["metadata"]["recType"] == "buzz":
+                    buzz_file_paths.append(file_path)
+                    buzz_submissions.append(submission)
+                else:
+                    normal_file_paths.append(file_path)
         try:
-            file2gfid = qtpm.gdrive_upload_many(file_paths)
+            file2gfid = qtpm.gdrive_upload_many(normal_file_paths, "/")
+            file2gfid.update(qtpm.gdrive_upload_many(buzz_file_paths, "/Buzz"))
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
+        # sub2gfid = {os.path.splitext(file)[0]: file2gfid[file] for file in file2gfid}
         sub2meta = {}
         sub2vtt = {}
 
         for submission in results:
-            sub2meta[submission] = results[submission]["metadata"]
-            sub2vtt[submission] = results[submission]["vtt"]
+            doc = results[submission]
+            sub2meta[submission] = doc["metadata"]
+            if "vtt" in doc:
+                sub2vtt[submission] = doc.get("vtt")
 
         # Insert submissions
         qtpm.mongodb_insert_submissions(
             sub2gfid={os.path.splitext(file)[0]: file2gfid[file] for file in file2gfid},
             sub2meta=sub2meta,
-            sub2vtt=sub2vtt
+            sub2vtt=sub2vtt,
+            buzz_submissions=buzz_submissions
         )
 
         for submission in results:
@@ -329,11 +355,9 @@ def create_app(env_name: str = os.environ.get("Q_ENV"), env_overrides=None):
     # DO NOT INCLUDE THE ROUTES BELOW IN DEPLOYMENT
     @app.route("/uploadtest/")
     def recording_listener_test():
+        if app.config["Q_ENV"] not in ["development", "testing"]:
+            abort(HTTPStatus.NOT_FOUND)
         return render_template("uploadtest.html")
-
-    @app.route("/processedaudiotest/")
-    def processed_audio_test():
-        return render_template("processedaudiotest.html")
 
     # Return the next submission name.
     def _get_next_submission_name():
