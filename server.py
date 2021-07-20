@@ -21,29 +21,62 @@ logger = logging.getLogger(__name__)
 
 # Flask app factory function
 def create_app(test_overrides=None):
+    app = Flask(
+        __name__,
+        instance_relative_config=True,
+        instance_path=os.path.expanduser(os.path.join("~", "quizzr_server"))
+    )
     server_dir = os.path.dirname(__file__)
-    rec_dir = os.path.join(server_dir, "recordings")
-    conf_path_default = os.path.join(server_dir, "sv_config_default.json")
-    conf_path = os.path.join(server_dir, "sv_config.json")
-    with open(conf_path_default, "r") as default_config_f, open(conf_path, "r") as config_f:
-        default_config = json.load(default_config_f)
-        config = json.load(config_f)
+    os.makedirs(app.instance_path, exist_ok=True)
+    path = app.instance_path
+    default_config = {
+        "UNPROC_FIND_LIMIT": 32,
+        "REC_QUEUE_LIMIT": 32,
+        "G_FOLDER": "Recordings",
+        "DATABASE": "QuizzrDatabase",
+        "Q_ENV": "production",
+        "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
+        "DIFFICULTY_LIMITS": [3, 6, None],
+        "G_DIR_STRUCT": {
+            "children": {
+                "Buzz": {}
+            }
+        },
+        "VERSION": "0.1.1"
+    }
 
-    app_conf = deepcopy(default_config)
-    app_conf.update(config)
+    conf_path = os.path.join(path, "sv_config.json")
+
+    app_conf = default_config
+    if not os.path.exists(conf_path):
+        with open(conf_path, "w") as config_f:
+            json.dump(default_config, config_f, indent=2)
+    else:
+        with open(conf_path, "r") as config_f:
+            config = json.load(config_f)
+        app_conf.update(config)
+
     for var in app_conf:
         if type(app_conf[var]) is not str and var in os.environ:
             raise Exception(f"Cannot override non-string config field '{var}' through environment variable")
     app_conf.update(os.environ)
-    app_conf["SERVER_DIR"] = server_dir
-    app_conf["REC_DIR"] = rec_dir
     if test_overrides:
         app_conf.update(test_overrides)
 
-    app = Flask(__name__)
+    rec_dir = os.path.join(app.instance_path, "recordings")
+    if not os.path.exists(rec_dir):
+        os.mkdir(rec_dir)
+
+    secret_dir = os.path.join(app.instance_path, "secrets")
+    if not os.path.exists(secret_dir):
+        os.mkdir(secret_dir)
+
+    app_conf["SERVER_DIR"] = server_dir
+    app_conf["REC_DIR"] = rec_dir
+
     app.config.from_mapping(app_conf)
     CORS(app)
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["G_FOLDER"], app_conf["G_DIR_STRUCT"], app_conf["VERSION"])
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["G_FOLDER"], app_conf["G_DIR_STRUCT"], app_conf["VERSION"], app.instance_path)
     qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"], qtpm.gdrive)
     # TODO: multiprocessing
 
@@ -174,7 +207,7 @@ def create_app(test_overrides=None):
         if not correct_answer:
             return "answer_not_found", HTTPStatus.NOT_FOUND
 
-        return {"correct": user_answer == correct_answer}
+        return {"correct": correct_answer in user_answer}
 
     # Retrieve a file from Google Drive.
     @app.route("/download/<gfile_id>", methods=["GET"])
@@ -286,7 +319,7 @@ def create_app(test_overrides=None):
             #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
             # )
             results = qp.pick_submissions(
-                rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR, size_limit=app.config["REC_QUEUE_LIMIT"])
+                rec_processing.QuizzrWatcher.queue_submissions(app.config["REC_DIR"], size_limit=app.config["REC_QUEUE_LIMIT"])
             )
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
@@ -317,9 +350,10 @@ def create_app(test_overrides=None):
 
         for submission in results:
             doc = results[submission]
-            sub2meta[submission] = doc["metadata"]
-            if "vtt" in doc:
-                sub2vtt[submission] = doc.get("vtt")
+            if doc["case"] == "accepted":
+                sub2meta[submission] = doc["metadata"]
+                if "vtt" in doc:
+                    sub2vtt[submission] = doc.get("vtt")
 
         # Insert submissions
         qtpm.mongodb_insert_submissions(

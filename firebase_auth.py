@@ -21,7 +21,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 
-class GDriveAuth:
+class FirebaseAuth:
     def __init__(self, token_dir):
         self.token_path = os.path.join(token_dir, 'token.json')
         # If modifying these scopes, delete the file token.json.
@@ -53,4 +53,4 @@ class GDriveAuth:
 
 
 if __name__ == '__main__':
-    GDriveAuth(os.path.join(os.path.dirname(__file__), "privatedata"))
+    FirebaseAuth(os.path.join(os.path.dirname(__file__), "privatedata"))

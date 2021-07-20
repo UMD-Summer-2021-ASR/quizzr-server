@@ -154,6 +154,9 @@ class QuizzrProcessor:
                 continue
 
             accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
+            if accuracy is None:
+                results[submission]["err"] = "runtime_error"
+                continue
             # accuracy = self.ACCURACY_CUTOFF
             # accuracy = random.random()
 
@@ -174,7 +177,7 @@ class QuizzrProcessor:
             alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         except RuntimeError as e:
             logging.error(f"Encountered RuntimeError: {e}. Aborting")
-            return self.ERROR_ACCURACY
+            return None, None
         words = alignment.words
         for word_data in words:
             if word_data.case == "success":

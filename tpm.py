@@ -13,24 +13,37 @@ from pymongo import UpdateOne
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-import gdrive_authentication
+import firebase_auth
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import storage
 
 
 # Consists of mostly helper methods.
 class QuizzrTPM:
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name, g_root_name, folder_struct, version,
-                 server_dir=os.path.dirname(__file__)):
+    def __init__(self, database_name, g_root_name, folder_struct, version, instance_path):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
         self.VERSION = version
 
-        self.SERVER_DIR = server_dir
-        self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "privatedata")
+        self.SERVER_DIR = instance_path
+        self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "secrets")
+        if not os.path.exists(self.SECRET_DATA_DIR):
+            os.mkdir(self.SECRET_DATA_DIR)
+
         self.REC_DIR = os.path.join(self.SERVER_DIR, "recordings")
+        if not os.path.exists(self.REC_DIR):
+            os.mkdir(self.REC_DIR)
 
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
-        self.gdrive = gdrive_authentication.GDriveAuth(self.SECRET_DATA_DIR)
+        self.gdrive = firebase_auth.FirebaseAuth(self.SECRET_DATA_DIR)
+        cred = credentials.Certificate(os.path.join(self.SECRET_DATA_DIR, "service_account_key.json"))
+        firebase_admin.initialize_app(cred, {
+            "storageBucket": "quizzr_io_2021_storage.appspot.com"
+        })
+
+        bucket = storage.bucket()
 
         cache_file_name = ".tpm_cache.json"
         cache_file_path = os.path.join(self.SERVER_DIR, cache_file_name)
