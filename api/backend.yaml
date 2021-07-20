@@ -25,9 +25,12 @@ paths:
                     $ref: '#/components/schemas/GFileID'
                   vtt:
                     $ref: '#/components/schemas/VTT'
+                  qid:
+                    $ref: '#/components/schemas/Str-ObjectId'
                 required:
                   - id
                   - vtt
+                  - qid
         '404':
           description: Question Not Found
         '500':
@@ -47,8 +50,8 @@ paths:
                       - rec_not_found
                 required:
                   - err
-      operationId: get-answer
-      description: Retrieve an audio file ID and its associated VTT from a recorded question.
+      operationId: pick_game_question
+      description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
     parameters: []
   /answer/check:
     get:
@@ -60,8 +63,11 @@ paths:
           content:
             application/json:
               schema:
-                type: boolean
-      operationId: get-answer-check
+                type: object
+                properties:
+                  correct:
+                    type: boolean
+      operationId: check_answer
       parameters:
         - schema:
             type: string
@@ -73,7 +79,7 @@ paths:
           in: query
           name: qid
           description: The ID of the question selected
-      description: Check if the user's answer matches the stored answer of the associated question.
+      description: Check if the user's answer approximately matches the stored answer of the associated question.
   /audio/processed:
     post:
       summary: Add Processed Audio Data
@@ -102,7 +108,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorMsg'
-      operationId: post-audio-processed
+      operationId: handle_processing_results
       requestBody:
         content:
           application/json:
@@ -205,7 +211,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorMsg'
-      operationId: get-unprocessed-audio
+      operationId: get_unprocessed_audio
       description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
       parameters:
         - $ref: '#/components/parameters/Internal-Auth-Token'
@@ -226,7 +232,7 @@ paths:
           headers: {}
         '404':
           description: Not Found
-      operationId: get-download-gfile_id
+      operationId: retrieve_audio_file
       description: Retrieve an audio file from Google Drive.
   /record:
     get:
@@ -258,7 +264,7 @@ paths:
                   - results
         '404':
           description: Question Not Found
-      operationId: get-record
+      operationId: pick_recording_question
       description: Retrieve a question ID and its associated transcript
       parameters:
         - schema:
@@ -316,7 +322,7 @@ paths:
                       - prescreen_error
                 required:
                   - err
-      operationId: post-upload
+      operationId: pre_screen
       parameters: []
       requestBody:
         content:
@@ -337,7 +343,6 @@ paths:
                   type: string
               required:
                 - audio
-                - qid
                 - recType
             examples:
               user-submission:
@@ -350,7 +355,7 @@ paths:
                   audio: {}
                   qid: 81d04b85a09490e12cde7bfc
                   recType: normal
-                  diarMetadata: detect_num_speakers=False, max_num_speakers=3
+                  diarMetadata: 'detect_num_speakers=False, max_num_speakers=3'
               user-buzz-submission:
                 value:
                   audio: {}
@@ -372,7 +377,7 @@ paths:
                 $ref: '#/components/schemas/ErrorMsg'
         '500':
           description: Internal Server Error
-      operationId: post-upload-question
+      operationId: upload_questions
       description: Upload a batch of unrecorded questions.
       requestBody:
         content:
@@ -393,12 +398,20 @@ paths:
                         type: string
                       recDifficulty:
                         type: integer
+                        description: 'A value returned from the bag-of-words-test (see https://github.com/UMD-Summer-2021-ASR/bag-of-words-test).'
                     required:
                       - transcript
                       - answer
                       - recDifficulty
               required:
                 - arguments
+            examples:
+              example-1:
+                value:
+                  arguments:
+                    - transcript: 'This man ordered Thomas Larkin to buy him seventy square miles of land, leading him to acquire his Mariposa gold mine. He married Jessie, the daughter of Thomas Hart Benton, and, during the Civil War, he controversially confiscated slaveholder property while acting as the leader of (*) Missouri. Kit Carson served as the guide for the first two of his expeditions to survey the American West. For 10 points, name this explorer known as "the Pathfinder" who was also the first presidential candidate of the Republican Party.'
+                      answer: John C. Fremont
+                      recDifficulty: 4
         description: A batch of unrecorded question documents.
       parameters:
         - $ref: '#/components/parameters/Internal-Auth-Token'
