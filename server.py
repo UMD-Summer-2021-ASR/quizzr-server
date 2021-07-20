@@ -5,6 +5,7 @@ import random
 from copy import deepcopy
 from datetime import datetime
 from http import HTTPStatus
+from fuzzywuzzy import fuzz
 
 import bson.json_util
 from flask import Flask, request, render_template, send_file
@@ -74,7 +75,9 @@ def create_app(test_overrides=None):
             if not question_ids:
                 logging.error("Failed to find a viable recorded question. Aborting")
                 return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        return audio
+        result = audio.copy()
+        result["qid"] = str(next_question_id)
+        return result
 
     # Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB Atlas.
     @app.route("/audio/unprocessed/", methods=["GET"])
@@ -174,7 +177,7 @@ def create_app(test_overrides=None):
         if not correct_answer:
             return "answer_not_found", HTTPStatus.NOT_FOUND
 
-        return {"correct": user_answer == correct_answer}
+        return {"correct": fuzz.token_set_ratio(user_answer, correct_answer) >= app.config["MIN_ANSWER_SIMILARITY"]}
 
     # Retrieve a file from Google Drive.
     @app.route("/download/<gfile_id>", methods=["GET"])

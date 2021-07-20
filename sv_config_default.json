@@ -6,6 +6,7 @@
   "Q_ENV": "production",
   "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
   "DIFFICULTY_LIMITS": [3, 6, null],
+  "MIN_ANSWER_SIMILARITY": 50,
   "G_DIR_STRUCT": {
     "children": {
       "Buzz": {}
