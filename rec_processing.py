@@ -55,7 +55,7 @@ class QuizzrWatcher:
 
 
 class QuizzrProcessor:
-    def __init__(self, database, directory: str, version: str, gdrive):
+    def __init__(self, database, directory: str, version: str):
         self.VERSION = version
         self.DIRECTORY = directory
         self.SUBMISSION_FILE_TYPES = ["wav", "json", "vtt"]
@@ -66,8 +66,6 @@ class QuizzrProcessor:
         self.unrec_questions = database.UnrecordedQuestions
         self.audio = database.Audio
         self.unproc_audio = database.UnprocessedAudio
-
-        self.gdrive = gdrive
 
         self.punc_regex = re.compile(r"[.?!,;:\"\-]")
         self.whitespace_regex = re.compile(r"\s+")

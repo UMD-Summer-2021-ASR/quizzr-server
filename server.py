@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import random
-from copy import deepcopy
 from datetime import datetime
 from http import HTTPStatus
 
@@ -32,16 +31,10 @@ def create_app(test_overrides=None):
     default_config = {
         "UNPROC_FIND_LIMIT": 32,
         "REC_QUEUE_LIMIT": 32,
-        "G_FOLDER": "Recordings",
         "DATABASE": "QuizzrDatabase",
         "Q_ENV": "production",
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
-        "G_DIR_STRUCT": {
-            "children": {
-                "Buzz": {}
-            }
-        },
         "VERSION": "0.1.1"
     }
 
@@ -76,8 +69,8 @@ def create_app(test_overrides=None):
 
     app.config.from_mapping(app_conf)
     CORS(app)
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["G_FOLDER"], app_conf["G_DIR_STRUCT"], app_conf["VERSION"], app.instance_path)
-    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"], qtpm.gdrive)
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["VERSION"], app.instance_path)
+    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"])
     # TODO: multiprocessing
 
     # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
@@ -209,17 +202,10 @@ def create_app(test_overrides=None):
 
         return {"correct": correct_answer in user_answer}
 
-    # Retrieve a file from Google Drive.
-    @app.route("/download/<gfile_id>", methods=["GET"])
-    def retrieve_audio_file(gfile_id):
-        if qtpm.gdrive.creds.expired:
-            qtpm.gdrive.refresh()
-        try:
-            file_data = qtpm.get_gfile(gfile_id)
-        except BrokenPipeError as e:
-            logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
-        return send_file(file_data, mimetype="audio/wav")
+    # Retrieve a file from Firebase Storage.
+    @app.route("/download/<blob_name>", methods=["GET"])
+    def retrieve_audio_file(blob_name):
+        return send_file(qtpm.get_file_blob(blob_name), mimetype="audio/wav")
 
     # Find a random unrecorded question (or multiple) and return the ID and transcript.
     @app.route("/record/", methods=["GET"])
@@ -338,8 +324,8 @@ def create_app(test_overrides=None):
                 else:
                     normal_file_paths.append(file_path)
         try:
-            file2gfid = qtpm.gdrive_upload_many(normal_file_paths, "/")
-            file2gfid.update(qtpm.gdrive_upload_many(buzz_file_paths, "/Buzz"))
+            file2gfid = qtpm.upload_many(normal_file_paths)
+            file2gfid.update(qtpm.upload_many(buzz_file_paths))
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
