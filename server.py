@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 def create_app(test_overrides=None):
     server_dir = os.path.dirname(__file__)
     rec_dir = os.path.join(server_dir, "recordings")
-    conf_path_default = os.path.join(server_dir, "sv_config_default.json")
-    conf_path = os.path.join(server_dir, "sv_config.json")
+    conf_path_default = os.path.join(server_dir, "configs", "sv_config_default.json")
+    conf_path = os.path.join(server_dir, "configs", "sv_config.json")
     with open(conf_path_default, "r") as default_config_f, open(conf_path, "r") as config_f:
         default_config = json.load(default_config_f)
         config = json.load(config_f)
