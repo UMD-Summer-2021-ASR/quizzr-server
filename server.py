@@ -41,7 +41,8 @@ def create_app(test_overrides=None, test_inst_path=None):
         "Q_ENV": "production",
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
-        "VERSION": "0.2.0"
+        "VERSION": "0.2.0",
+        "MIN_ANSWER_SIMILARITY": 50
     }
 
     config_dir = os.path.join(path, "config")
