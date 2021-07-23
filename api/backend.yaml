@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: backend
-  version: '1.0'
+  version: '0.2.0'
   summary: API for the Flask Server
   description: ''
 servers:

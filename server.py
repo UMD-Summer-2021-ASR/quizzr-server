@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import random
-from copy import deepcopy
 from datetime import datetime
 from http import HTTPStatus
 from fuzzywuzzy import fuzz
@@ -21,31 +20,65 @@ logger = logging.getLogger(__name__)
 
 
 # Flask app factory function
-def create_app(test_overrides=None):
+def create_app(test_overrides=None, test_inst_path=None):
+    instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
+                    or os.path.expanduser(os.path.join("~", "quizzr_server"))
+    app = Flask(
+        __name__,
+        instance_relative_config=True,
+        instance_path=instance_path
+    )
+    CORS(app)
     server_dir = os.path.dirname(__file__)
-    rec_dir = os.path.join(server_dir, "recordings")
-    conf_path_default = os.path.join(server_dir, "configs", "sv_config_default.json")
-    conf_path = os.path.join(server_dir, "configs", "sv_config.json")
-    with open(conf_path_default, "r") as default_config_f, open(conf_path, "r") as config_f:
-        default_config = json.load(default_config_f)
-        config = json.load(config_f)
+    os.makedirs(app.instance_path, exist_ok=True)
+    path = app.instance_path
+    default_config = {
+        "UNPROC_FIND_LIMIT": 32,
+        "REC_QUEUE_LIMIT": 32,
+        "DATABASE": "QuizzrDatabase",
+        "BLOB_ROOT": "production",
+        "BLOB_NAME_LENGTH": 32,
+        "Q_ENV": "production",
+        "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
+        "DIFFICULTY_LIMITS": [3, 6, None],
+        "VERSION": "0.2.0"
+    }
 
-    app_conf = deepcopy(default_config)
-    app_conf.update(config)
+    config_dir = os.path.join(path, "config")
+    if not os.path.exists(config_dir):
+        os.mkdir(config_dir)
+    conf_path = os.path.join(config_dir, "sv_config.json")
+
+    app_conf = default_config
+    if os.path.exists(conf_path):
+        with open(conf_path, "r") as config_f:
+            config = json.load(config_f)
+        app_conf.update(config)
+
     for var in app_conf:
         if type(app_conf[var]) is not str and var in os.environ:
             raise Exception(f"Cannot override non-string config field '{var}' through environment variable")
     app_conf.update(os.environ)
-    app_conf["SERVER_DIR"] = server_dir
-    app_conf["REC_DIR"] = rec_dir
     if test_overrides:
         app_conf.update(test_overrides)
 
-    app = Flask(__name__)
+    rec_dir = os.path.join(app.instance_path, "storage", "queue")
+    if not os.path.exists(rec_dir):
+        os.makedirs(rec_dir)
+
+    secret_dir = os.path.join(app.instance_path, "secrets")
+    if not os.path.exists(secret_dir):
+        os.makedirs(secret_dir)
+
+    app_conf["SERVER_DIR"] = server_dir
+    app_conf["REC_DIR"] = rec_dir
+
+    if app_conf["Q_ENV"] == "production":
+        logging.warning("Using the production environment in development is heavily discouraged")
+
     app.config.from_mapping(app_conf)
-    CORS(app)
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["G_FOLDER"], app_conf["G_DIR_STRUCT"], app_conf["VERSION"])
-    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"], qtpm.gdrive)
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir)
+    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"])
     # TODO: multiprocessing
 
     # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
@@ -179,17 +212,10 @@ def create_app(test_overrides=None):
 
         return {"correct": fuzz.token_set_ratio(user_answer, correct_answer) >= app.config["MIN_ANSWER_SIMILARITY"]}
 
-    # Retrieve a file from Google Drive.
-    @app.route("/download/<gfile_id>", methods=["GET"])
-    def retrieve_audio_file(gfile_id):
-        if qtpm.gdrive.creds.expired:
-            qtpm.gdrive.refresh()
-        try:
-            file_data = qtpm.get_gfile(gfile_id)
-        except BrokenPipeError as e:
-            logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
-        return send_file(file_data, mimetype="audio/wav")
+    # Retrieve a file from Firebase Storage.
+    @app.route("/download/<path:blob_path>", methods=["GET"])
+    def retrieve_audio_file(blob_path):
+        return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
     # Find a random unrecorded question (or multiple) and return the ID and transcript.
     @app.route("/record/", methods=["GET"])
@@ -289,7 +315,7 @@ def create_app(test_overrides=None):
             #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
             # )
             results = qp.pick_submissions(
-                rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR, size_limit=app.config["REC_QUEUE_LIMIT"])
+                rec_processing.QuizzrWatcher.queue_submissions(app.config["REC_DIR"], size_limit=app.config["REC_QUEUE_LIMIT"])
             )
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
@@ -308,25 +334,26 @@ def create_app(test_overrides=None):
                 else:
                     normal_file_paths.append(file_path)
         try:
-            file2gfid = qtpm.gdrive_upload_many(normal_file_paths, "/")
-            file2gfid.update(qtpm.gdrive_upload_many(buzz_file_paths, "/Buzz"))
+            file2blob = qtpm.upload_many(normal_file_paths, "normal")
+            file2blob.update(qtpm.upload_many(buzz_file_paths, "buzz"))
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
-        # sub2gfid = {os.path.splitext(file)[0]: file2gfid[file] for file in file2gfid}
+        # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
         sub2vtt = {}
 
         for submission in results:
             doc = results[submission]
-            sub2meta[submission] = doc["metadata"]
-            if "vtt" in doc:
-                sub2vtt[submission] = doc.get("vtt")
+            if doc["case"] == "accepted":
+                sub2meta[submission] = doc["metadata"]
+                if "vtt" in doc:
+                    sub2vtt[submission] = doc.get("vtt")
 
         # Insert submissions
         qtpm.mongodb_insert_submissions(
-            sub2gfid={os.path.splitext(file)[0]: file2gfid[file] for file in file2gfid},
+            sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
             sub2meta=sub2meta,
             sub2vtt=sub2vtt,
             buzz_submissions=buzz_submissions

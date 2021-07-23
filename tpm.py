@@ -1,49 +1,40 @@
 import collections.abc
 import io
-import json
 import logging
 import os
 import random
 from copy import deepcopy
 from typing import Dict, Any, List
+from secrets import token_urlsafe
 
 import pymongo
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 from pymongo import UpdateOne
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-import gdrive_authentication
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import storage
 
 
 # Consists of mostly helper methods.
 class QuizzrTPM:
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name, g_root_name, folder_struct, version,
-                 server_dir=os.path.dirname(__file__)):
+    def __init__(self, database_name, app_config, secret_dir, rec_dir):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
-        self.VERSION = version
+        self.app_config = app_config
 
-        self.SERVER_DIR = server_dir
-        self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "privatedata")
-        self.REC_DIR = os.path.join(self.SERVER_DIR, "recordings")
+        self.SECRET_DATA_DIR = secret_dir
+        self.REC_DIR = rec_dir
 
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
-        self.gdrive = gdrive_authentication.GDriveAuth(self.SECRET_DATA_DIR)
+        cred = credentials.Certificate(os.path.join(self.SECRET_DATA_DIR, "firebase_storage_key.json"))
+        firebase_admin.initialize_app(cred, {
+            "storageBucket": "quizzrio.appspot.com"
+        })
 
-        cache_file_name = ".tpm_cache.json"
-        cache_file_path = os.path.join(self.SERVER_DIR, cache_file_name)
-
-        if QuizzrTPM._is_struct_override(folder_struct):
-            self.g_dir_struct = folder_struct
-        else:
-            self.g_dir_struct = QuizzrTPM.init_g_dir_structure(
-                self.gdrive.service,
-                cache_file_path,
-                g_root_name,
-                folder_struct
-            )
+        self.bucket = storage.bucket()
 
         self.database: Database = self.mongodb_client.get_database(database_name)
 
@@ -153,20 +144,16 @@ class QuizzrTPM:
         errs += [("internal_error", "user_update_failure")] * missed_results
         return errs
 
-    # Retrieve a file from Google Drive and stores it in-memory.
-    def get_gfile(self, file_id: str):
-        file_request = self.gdrive.service.files().get_media(fileId=file_id)
-        fh = io.BytesIO()
-        downloader = MediaIoBaseDownload(fh, file_request)
-        done = False
-        while done is False:
-            status, done = downloader.next_chunk()
-            print("Download %d%%." % int(status.progress() * 100))
+    # Retrieve a file from Firebase Storage and store it in-memory.
+    def get_file_blob(self, blob_path: str):
+        blob = self.bucket.blob("/".join([self.app_config["BLOB_ROOT"], blob_path]))
+        file_bytes = blob.download_as_bytes()
+        fh = io.BytesIO(file_bytes)
         return fh
 
     # Find and return the (processed) audio document with the best evaluation, applying a given projection.
     def find_best_audio_doc(self, recordings, required_fields=None, optional_fields=None, excluded_fields=None):
-        query = {"_id": {"$in": [rec["id"] for rec in recordings]}, "version": self.VERSION}
+        query = {"_id": {"$in": [rec["id"] for rec in recordings]}, "version": self.app_config["VERSION"]}
         if self.audio.count_documents(query) == 0:
             logging.error("No audio documents found")
             return
@@ -321,51 +308,47 @@ class QuizzrTPM:
         return results
 
     # Upload multiple audio files to Google Drive.
-    def gdrive_upload_many(self, file_paths: List[str], g_dir: str) -> Dict[str, str]:
-        parent = QuizzrTPM.get_dir_id(self.g_dir_struct, g_dir)
+    def upload_many(self, file_paths: List[str], subdir) -> Dict[str, str]:
         # TODO: Actual BrokenPipeError handling
-        file2gfid = {}
-        if self.gdrive.creds.expired:
-            self.gdrive.refresh()
+        file2blob = {}
 
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
-            file_metadata = {"name": file_name, "parents": [parent]}
+            blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
+            blob_path = self.get_blob_path(blob_name, subdir)
+            blob = self.bucket.blob(blob_path)
+            blob.upload_from_filename(file_path)
+            file2blob[file_name] = blob_name
 
-            media = MediaFileUpload(file_path, mimetype="audio/wav")
-            gfile = self.gdrive.service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-            gfile_id = gfile.get("id")
-            file2gfid[file_name] = gfile_id
-        return file2gfid
+        return file2blob
+
+    def get_blob_path(self, blob_name, subdir: str):
+        return "/".join([self.app_config["BLOB_ROOT"], subdir, blob_name])
 
     # Upload one audio file to Google Drive.
-    def gdrive_upload_one(self, file_path: str, g_dir: str) -> str:
-        parent = QuizzrTPM.get_dir_id(self.g_dir_struct, g_dir)
+    def upload_one(self, file_path: str, subdir: str) -> str:
         # TODO: Actual BrokenPipeError handling
-        if self.gdrive.creds.expired:
-            self.gdrive.refresh()
+        blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
+        blob_path = self.get_blob_path(blob_name, subdir)
+        blob = self.bucket.blob(blob_path)
+        blob.upload_from_filename(file_path)
 
-        file_name = os.path.basename(file_path)
-        file_metadata = {"name": file_name, "parents": [parent]}
-
-        media = MediaFileUpload(file_path, mimetype="audio/wav")
-        gfile = self.gdrive.service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        return gfile.get("id")
+        return blob_name
 
     # Upload submission metadata to MongoDB.
     def mongodb_insert_submissions(
             self,
-            sub2gfid: Dict[str, str],
+            sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
             sub2vtt,
             buzz_submissions):
         unproc_audio_batch = []
         audio_batch = []
         uid2rec_doc = {}
-        for submission, audio_id in sub2gfid.items():
+        for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
-                "version": self.VERSION
+                "version": self.app_config["VERSION"]
             }
             if submission not in buzz_submissions:
                 entry["gentleVtt"] = sub2vtt[submission]
@@ -417,109 +400,6 @@ class QuizzrTPM:
             query_op["$lte"] = upper_bound
         return query_op
 
-    # Create a folder in Google Drive.
-    @staticmethod
-    def create_g_folder(service, name, parent=None):
-        file_metadata = {
-            "name": name,
-            "mimeType": "application/vnd.google-apps.folder"
-        }
-        if parent:
-            file_metadata["parents"] = [parent]
-        folder = service.files().create(body=file_metadata, fields='id').execute()
-        return folder.get('id')
-
-    # Update the cached structure to fit the new schema.
-    @staticmethod
-    def update_cached_struct(struct):
-        if type(struct) is str:
-            return {"id": struct}
-        return struct
-
-    # Determine if all the folders requested are present in root_struct each with an ID.
-    @staticmethod
-    def is_complete_struct(root_struct, in_struct):
-        if "id" not in root_struct:
-            return False
-        if "children" not in in_struct:
-            return True
-        if "children" not in root_struct:
-            return False
-        for child_name, child_struct in in_struct["children"].items():
-            if child_name not in root_struct["children"] or not QuizzrTPM.is_complete_struct(root_struct["children"][child_name], child_struct):
-                return False
-
-        return True
-
-    # Set up the directory structure for Google Drive and cache it. Load from the cache if it is present.
-    @staticmethod
-    def init_g_dir_structure(service, cached_struct_path: str, root_name: str, in_struct: dict):
-        if os.path.exists(cached_struct_path):
-            with open(cached_struct_path, "r") as cache_f:
-                cached = json.load(cache_f)
-            root_struct = QuizzrTPM.update_cached_struct(cached.get(root_name) or {})
-        else:
-            cached = {}
-            root_struct = {}
-
-        # If it is incomplete, include all the available IDs to prevent unnecessary building.
-        if not QuizzrTPM.is_complete_struct(root_struct, in_struct):
-            in_struct_c = deepcopy(in_struct)
-            QuizzrTPM._deep_update(in_struct_c, root_struct)  # Takes advantage of the schemas being similar.
-            final_struct = QuizzrTPM.build_g_dir_structure(service, root_name, in_struct_c)
-            root_struct = final_struct[root_name]
-
-            cached.update(final_struct)
-            with open(cached_struct_path, "w") as cache_f:
-                json.dump(cached, cache_f)
-
-        return root_struct
-
-    # The function that actually builds the directory structure. Does not cache it.
-    # Precondition: Children of folders without IDs do not have IDs either.
-    @staticmethod
-    def build_g_dir_structure(service, root_name, in_struct, parent=None):
-        if "id" in in_struct:  # Allow for handling of incomplete directory structures
-            root_id = in_struct["id"]
-        else:
-            root_id = QuizzrTPM.create_g_folder(service, root_name, parent)
-        root_out_struct = {"id": root_id}
-        if "children" in in_struct:
-            root_out_struct["children"] = {}
-            for child_name, child_in_struct in in_struct["children"].items():
-                child_out_struct = QuizzrTPM.build_g_dir_structure(service, child_name, child_in_struct, root_id)
-                root_out_struct["children"].update(child_out_struct)
-        return {root_name: root_out_struct}
-
-    # Convert a string directory into a directory sequence.
-    # Precondition: The folders in the directory string do not contain the path delimiter.
-    @staticmethod
-    def parse_g_dir(directory: str):
-        if not directory.startswith(QuizzrTPM.G_PATH_DELIMITER):
-            raise ValueError(f"Directory {directory!r} must be absolute")
-        if directory == "/":
-            return []
-        if directory.endswith(QuizzrTPM.G_PATH_DELIMITER):
-            directory_slice = directory[1:-1]
-        else:
-            directory_slice = directory[1:]
-        return directory_slice.split(QuizzrTPM.G_PATH_DELIMITER)
-
-    # Retrieve the ID of the folder that is deepest in the directory.
-    @staticmethod
-    def get_dir_id(struct, directory: str):
-        return QuizzrTPM._get_dir_id_rec(struct, QuizzrTPM.parse_g_dir(directory))
-
-    # Make a recursive call passing in the child structure.
-    @staticmethod
-    def _get_dir_id_rec(struct, directory_seq: list):
-        if not directory_seq:
-            return struct["id"]
-
-        if "children" not in struct or directory_seq[0] not in struct["children"]:
-            raise NotADirectoryError(f"No such directory: {directory_seq[0]!r}")
-        return QuizzrTPM._get_dir_id_rec(struct["children"][directory_seq[0]], directory_seq[1:])
-
     # Solution from: https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
     # Update a dictionary and all nested dictionaries.
     @staticmethod
@@ -530,14 +410,3 @@ class QuizzrTPM:
             else:
                 d[k] = v
         return d
-
-    @staticmethod
-    def _is_struct_override(struct):
-        if "id" not in struct:
-            return False
-        if "children" not in struct:
-            return True
-        for child_struct in struct["children"].values():
-            if not QuizzrTPM._is_struct_override(child_struct):
-                return False
-        return True
