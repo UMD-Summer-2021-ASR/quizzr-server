@@ -145,8 +145,8 @@ class QuizzrTPM:
         return errs
 
     # Retrieve a file from Firebase Storage and store it in-memory.
-    def get_file_blob(self, blob_name: str):
-        blob = self.bucket.blob("/".join([self.app_config["BLOB_ROOT"], blob_name]))
+    def get_file_blob(self, blob_path: str):
+        blob = self.bucket.blob("/".join([self.app_config["BLOB_ROOT"], blob_path]))
         file_bytes = blob.download_as_bytes()
         fh = io.BytesIO(file_bytes)
         return fh
@@ -308,28 +308,28 @@ class QuizzrTPM:
         return results
 
     # Upload multiple audio files to Google Drive.
-    def upload_many(self, file_paths: List[str]) -> Dict[str, str]:
+    def upload_many(self, file_paths: List[str], subdir) -> Dict[str, str]:
         # TODO: Actual BrokenPipeError handling
         file2blob = {}
 
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
             blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
-            blob_path = self.get_blob_path(blob_name)
+            blob_path = self.get_blob_path(blob_name, subdir)
             blob = self.bucket.blob(blob_path)
             blob.upload_from_filename(file_path)
             file2blob[file_name] = blob_name
 
         return file2blob
 
-    def get_blob_path(self, blob_name):
-        return "/".join([self.app_config["BLOB_ROOT"], blob_name])
+    def get_blob_path(self, blob_name, subdir: str):
+        return "/".join([self.app_config["BLOB_ROOT"], subdir, blob_name])
 
     # Upload one audio file to Google Drive.
-    def upload_one(self, file_path: str) -> str:
+    def upload_one(self, file_path: str, subdir: str) -> str:
         # TODO: Actual BrokenPipeError handling
         blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
-        blob_path = self.get_blob_path(blob_name)
+        blob_path = self.get_blob_path(blob_name, subdir)
         blob = self.bucket.blob(blob_path)
         blob.upload_from_filename(file_path)
 

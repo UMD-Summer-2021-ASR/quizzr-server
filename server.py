@@ -40,7 +40,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         "Q_ENV": "production",
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
-        "VERSION": "firebase_branch"
+        "VERSION": "0.2.0"
     }
 
     config_dir = os.path.join(path, "config")
@@ -210,9 +210,9 @@ def create_app(test_overrides=None, test_inst_path=None):
         return {"correct": correct_answer in user_answer}
 
     # Retrieve a file from Firebase Storage.
-    @app.route("/download/<blob_name>", methods=["GET"])
-    def retrieve_audio_file(blob_name):
-        return send_file(qtpm.get_file_blob(blob_name), mimetype="audio/wav")
+    @app.route("/download/<path:blob_path>", methods=["GET"])
+    def retrieve_audio_file(blob_path):
+        return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
     # Find a random unrecorded question (or multiple) and return the ID and transcript.
     @app.route("/record/", methods=["GET"])
@@ -331,8 +331,8 @@ def create_app(test_overrides=None, test_inst_path=None):
                 else:
                     normal_file_paths.append(file_path)
         try:
-            file2blob = qtpm.upload_many(normal_file_paths)
-            file2blob.update(qtpm.upload_many(buzz_file_paths))
+            file2blob = qtpm.upload_many(normal_file_paths, "normal")
+            file2blob.update(qtpm.upload_many(buzz_file_paths, "buzz"))
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
