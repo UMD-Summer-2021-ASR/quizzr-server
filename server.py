@@ -19,12 +19,15 @@ logger = logging.getLogger(__name__)
 
 
 # Flask app factory function
-def create_app(test_overrides=None):
+def create_app(test_overrides=None, test_inst_path=None):
+    instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
+                    or os.path.expanduser(os.path.join("~", "quizzr_server"))
     app = Flask(
         __name__,
         instance_relative_config=True,
-        instance_path=os.path.expanduser(os.path.join("~", "quizzr_server"))
+        instance_path=instance_path
     )
+    CORS(app)
     server_dir = os.path.dirname(__file__)
     os.makedirs(app.instance_path, exist_ok=True)
     path = app.instance_path
@@ -32,19 +35,21 @@ def create_app(test_overrides=None):
         "UNPROC_FIND_LIMIT": 32,
         "REC_QUEUE_LIMIT": 32,
         "DATABASE": "QuizzrDatabase",
+        "BLOB_ROOT": "production",
+        "BLOB_NAME_LENGTH": 32,
         "Q_ENV": "production",
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
-        "VERSION": "0.1.1"
+        "VERSION": "firebase_branch"
     }
 
-    conf_path = os.path.join(path, "sv_config.json")
+    config_dir = os.path.join(path, "config")
+    if not os.path.exists(config_dir):
+        os.mkdir(config_dir)
+    conf_path = os.path.join(config_dir, "sv_config.json")
 
     app_conf = default_config
-    if not os.path.exists(conf_path):
-        with open(conf_path, "w") as config_f:
-            json.dump(default_config, config_f, indent=2)
-    else:
+    if os.path.exists(conf_path):
         with open(conf_path, "r") as config_f:
             config = json.load(config_f)
         app_conf.update(config)
@@ -56,20 +61,22 @@ def create_app(test_overrides=None):
     if test_overrides:
         app_conf.update(test_overrides)
 
-    rec_dir = os.path.join(app.instance_path, "recordings")
+    rec_dir = os.path.join(app.instance_path, "storage", "queue")
     if not os.path.exists(rec_dir):
-        os.mkdir(rec_dir)
+        os.makedirs(rec_dir)
 
     secret_dir = os.path.join(app.instance_path, "secrets")
     if not os.path.exists(secret_dir):
-        os.mkdir(secret_dir)
+        os.makedirs(secret_dir)
 
     app_conf["SERVER_DIR"] = server_dir
     app_conf["REC_DIR"] = rec_dir
 
+    if app_conf["Q_ENV"] == "production":
+        logging.warning("Using the production environment in development is heavily discouraged")
+
     app.config.from_mapping(app_conf)
-    CORS(app)
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf["VERSION"], app.instance_path)
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir)
     qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"])
     # TODO: multiprocessing
 
@@ -324,13 +331,13 @@ def create_app(test_overrides=None):
                 else:
                     normal_file_paths.append(file_path)
         try:
-            file2gfid = qtpm.upload_many(normal_file_paths)
-            file2gfid.update(qtpm.upload_many(buzz_file_paths))
+            file2blob = qtpm.upload_many(normal_file_paths)
+            file2blob.update(qtpm.upload_many(buzz_file_paths))
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
-        # sub2gfid = {os.path.splitext(file)[0]: file2gfid[file] for file in file2gfid}
+        # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
         sub2vtt = {}
 
@@ -343,7 +350,7 @@ def create_app(test_overrides=None):
 
         # Insert submissions
         qtpm.mongodb_insert_submissions(
-            sub2gfid={os.path.splitext(file)[0]: file2gfid[file] for file in file2gfid},
+            sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
             sub2meta=sub2meta,
             sub2vtt=sub2vtt,
             buzz_submissions=buzz_submissions

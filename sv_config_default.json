@@ -1,9 +1,0 @@
-{
-  "UNPROC_FIND_LIMIT": 32,
-  "REC_QUEUE_LIMIT": 32,
-  "DATABASE": "QuizzrDatabase",
-  "Q_ENV": "production",
-  "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
-  "DIFFICULTY_LIMITS": [3, 6, null],
-  "VERSION": "0.1.1"
-}

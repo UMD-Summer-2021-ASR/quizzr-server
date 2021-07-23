@@ -5,6 +5,7 @@ import os
 import random
 from copy import deepcopy
 from typing import Dict, Any, List
+from secrets import token_urlsafe
 
 import pymongo
 from pymongo import UpdateOne
@@ -20,23 +21,17 @@ from firebase_admin import storage
 class QuizzrTPM:
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name, version, instance_path):
+    def __init__(self, database_name, app_config, secret_dir, rec_dir):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
-        self.VERSION = version
+        self.app_config = app_config
 
-        self.SERVER_DIR = instance_path
-        self.SECRET_DATA_DIR = os.path.join(self.SERVER_DIR, "secrets")
-        if not os.path.exists(self.SECRET_DATA_DIR):
-            os.mkdir(self.SECRET_DATA_DIR)
-
-        self.REC_DIR = os.path.join(self.SERVER_DIR, "recordings")
-        if not os.path.exists(self.REC_DIR):
-            os.mkdir(self.REC_DIR)
+        self.SECRET_DATA_DIR = secret_dir
+        self.REC_DIR = rec_dir
 
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
-        cred = credentials.Certificate(os.path.join(self.SECRET_DATA_DIR, "service_account_key.json"))
+        cred = credentials.Certificate(os.path.join(self.SECRET_DATA_DIR, "firebase_storage_key.json"))
         firebase_admin.initialize_app(cred, {
-            "storageBucket": "quizzr_io_2021_storage.appspot.com"
+            "storageBucket": "quizzrio.appspot.com"
         })
 
         self.bucket = storage.bucket()
@@ -151,14 +146,14 @@ class QuizzrTPM:
 
     # Retrieve a file from Firebase Storage and store it in-memory.
     def get_file_blob(self, blob_name: str):
-        blob = self.bucket.blob(blob_name)
+        blob = self.bucket.blob("/".join([self.app_config["BLOB_ROOT"], blob_name]))
         file_bytes = blob.download_as_bytes()
         fh = io.BytesIO(file_bytes)
         return fh
 
     # Find and return the (processed) audio document with the best evaluation, applying a given projection.
     def find_best_audio_doc(self, recordings, required_fields=None, optional_fields=None, excluded_fields=None):
-        query = {"_id": {"$in": [rec["id"] for rec in recordings]}, "version": self.VERSION}
+        query = {"_id": {"$in": [rec["id"] for rec in recordings]}, "version": self.app_config["VERSION"]}
         if self.audio.count_documents(query) == 0:
             logging.error("No audio documents found")
             return
@@ -319,18 +314,23 @@ class QuizzrTPM:
 
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
-            blob_name = file_name
-            blob = self.bucket.blob(blob_name)
+            blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
+            blob_path = self.get_blob_path(blob_name)
+            blob = self.bucket.blob(blob_path)
             blob.upload_from_filename(file_path)
             file2blob[file_name] = blob_name
 
         return file2blob
 
+    def get_blob_path(self, blob_name):
+        return "/".join([self.app_config["BLOB_ROOT"], blob_name])
+
     # Upload one audio file to Google Drive.
     def upload_one(self, file_path: str) -> str:
         # TODO: Actual BrokenPipeError handling
-        blob_name = os.path.basename(file_path)
-        blob = self.bucket.blob(blob_name)
+        blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
+        blob_path = self.get_blob_path(blob_name)
+        blob = self.bucket.blob(blob_path)
         blob.upload_from_filename(file_path)
 
         return blob_name
@@ -338,17 +338,17 @@ class QuizzrTPM:
     # Upload submission metadata to MongoDB.
     def mongodb_insert_submissions(
             self,
-            sub2gfid: Dict[str, str],
+            sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
             sub2vtt,
             buzz_submissions):
         unproc_audio_batch = []
         audio_batch = []
         uid2rec_doc = {}
-        for submission, audio_id in sub2gfid.items():
+        for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
-                "version": self.VERSION
+                "version": self.app_config["VERSION"]
             }
             if submission not in buzz_submissions:
                 entry["gentleVtt"] = sub2vtt[submission]
