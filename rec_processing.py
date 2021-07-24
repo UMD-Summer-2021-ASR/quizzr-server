@@ -55,7 +55,7 @@ class QuizzrWatcher:
 
 
 class QuizzrProcessor:
-    def __init__(self, database, directory: str, version: str, gdrive):
+    def __init__(self, database, directory: str, version: str):
         self.VERSION = version
         self.DIRECTORY = directory
         self.SUBMISSION_FILE_TYPES = ["wav", "json", "vtt"]
@@ -66,8 +66,6 @@ class QuizzrProcessor:
         self.unrec_questions = database.UnrecordedQuestions
         self.audio = database.Audio
         self.unproc_audio = database.UnprocessedAudio
-
-        self.gdrive = gdrive
 
         self.punc_regex = re.compile(r"[.?!,;:\"\-]")
         self.whitespace_regex = re.compile(r"\s+")
@@ -154,6 +152,9 @@ class QuizzrProcessor:
                 continue
 
             accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
+            if accuracy is None:
+                results[submission]["err"] = "runtime_error"
+                continue
             # accuracy = self.ACCURACY_CUTOFF
             # accuracy = random.random()
 
@@ -174,7 +175,7 @@ class QuizzrProcessor:
             alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         except RuntimeError as e:
             logging.error(f"Encountered RuntimeError: {e}. Aborting")
-            return self.ERROR_ACCURACY
+            return None, None
         words = alignment.words
         for word_data in words:
             if word_data.case == "success":
