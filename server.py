@@ -82,39 +82,21 @@ def create_app(test_overrides=None, test_inst_path=None):
     qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"])
     # TODO: multiprocessing
 
-    # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
-    @app.route("/answer/", methods=["GET"])
-    def pick_game_question():
-        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
-        if not question_ids:
-            logging.error("No recorded questions found. Aborting")
-            return "rec_empty_qids", HTTPStatus.NOT_FOUND
-
-        # question_ids = qtpm.rec_question_ids.copy()
-        while True:
-            next_question_id = random.choice(question_ids)
-            next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
-            logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            logging.debug(f"next_question = {next_question!r}")
-
-            if next_question and next_question.get("recordings"):
-                audio = qtpm.find_best_audio_doc(
-                    next_question.get("recordings"),
-                    required_fields=["_id", "vtt", "gentleVtt"]
-                )
-                if audio:
-                    break
-            logging.warning(f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
-            question_ids.remove(next_question_id)
-            if not question_ids:
-                logging.error("Failed to find a viable recorded question. Aborting")
-                return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        result = audio.copy()
-        result["qid"] = str(next_question_id)
-        return result
-
     # Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB Atlas.
-    @app.route("/audio/unprocessed/", methods=["GET"])
+    @app.route("/audio", methods=["GET", "POST", "PATCH"])
+    def audio_resource():
+        if request.method == "GET":
+            return get_unprocessed_audio()
+        elif request.method == "POST":
+            recording = request.files.get("audio")
+            question_id = request.form.get("qid")
+            diarization_metadata = request.form.get("diarMetadata")
+            rec_type = request.form.get("recType")
+            return pre_screen(recording, question_id, diarization_metadata, rec_type)
+        elif request.method == "PATCH":
+            arguments_batch = request.get_json()
+            return handle_processing_results(arguments_batch)
+
     def get_unprocessed_audio():
         max_docs = app.config["UNPROC_FIND_LIMIT"]
         errs = []
@@ -172,9 +154,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     # Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
     # Additionally, update the recording history of the associated questions and users.
-    @app.route("/audio/processed", methods=["POST"])
-    def handle_processing_results():
-        arguments_batch = request.get_json()
+    def handle_processing_results(arguments_batch):
         arguments_list = arguments_batch.get("arguments")
         if arguments_list is None:
             return "undefined_arguments", HTTPStatus.BAD_REQUEST
@@ -196,7 +176,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         return results
 
     # Check if an answer is correct.
-    @app.route("/answer/check", methods=["GET"])
+    @app.route("/answer", methods=["GET"])
     def check_answer():
         qid = request.args.get("qid")
         user_answer = request.args.get("a")
@@ -214,15 +194,54 @@ def create_app(test_overrides=None, test_inst_path=None):
         return {"correct": fuzz.token_set_ratio(user_answer, correct_answer) >= app.config["MIN_ANSWER_SIMILARITY"]}
 
     # Retrieve a file from Firebase Storage.
-    @app.route("/download/<path:blob_path>", methods=["GET"])
+    @app.route("/audio/<path:blob_path>", methods=["GET"])
     def retrieve_audio_file(blob_path):
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
+    # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
+    @app.route("/question", methods=["GET"])
+    def pick_game_question():
+        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
+        if not question_ids:
+            logging.error("No recorded questions found. Aborting")
+            return "rec_empty_qids", HTTPStatus.NOT_FOUND
+
+        # question_ids = qtpm.rec_question_ids.copy()
+        while True:
+            next_question_id = random.choice(question_ids)
+            next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
+            logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
+            logging.debug(f"next_question = {next_question!r}")
+
+            if next_question and next_question.get("recordings"):
+                audio = qtpm.find_best_audio_doc(
+                    next_question.get("recordings"),
+                    required_fields=["_id", "vtt", "gentleVtt"]
+                )
+                if audio:
+                    break
+            logging.warning(
+                f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
+            question_ids.remove(next_question_id)
+            if not question_ids:
+                logging.error("Failed to find a viable recorded question. Aborting")
+                return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
+        result = audio.copy()
+        result["qid"] = str(next_question_id)
+        return result
+
     # Find a random unrecorded question (or multiple) and return the ID and transcript.
-    @app.route("/record/", methods=["GET"])
-    def pick_recording_question():
-        difficulty = request.args.get("difficultyType")
-        batch_size = request.args.get("batchSize")
+    @app.route("/question/unrec", methods=["GET", "POST"])
+    def unrec_question_resource():
+        if request.method == "GET":
+            difficulty = request.args.get("difficultyType")
+            batch_size = request.args.get("batchSize")
+            return pick_recording_question(difficulty, batch_size)
+        elif request.method == "POST":
+            arguments_batch = request.get_json()
+            return upload_questions(arguments_batch)
+
+    def pick_recording_question(difficulty, batch_size):
         if difficulty is not None:
             difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], int(difficulty))
             difficulty_query = {"recDifficulty": difficulty_query_op}
@@ -250,13 +269,8 @@ def create_app(test_overrides=None, test_inst_path=None):
         return {"results": results, "errors": errors}
 
     # Submit a recording for pre-screening and upload it to the database if it passes.
-    @app.route("/upload", methods=["POST"])
-    def pre_screen():
+    def pre_screen(recording, question_id, diarization_metadata, rec_type):
         valid_rec_types = ["normal", "buzz"]
-        recording = request.files.get("audio")
-        question_id = request.form.get("qid")
-        diarization_metadata = request.form.get("diarMetadata")
-        rec_type = request.form.get("recType")
 
         logging.debug(f"question_id = {question_id!r}")
         logging.debug(f"diarization_metadata = {diarization_metadata!r}")
@@ -372,9 +386,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
 
     # Upload a batch of unrecorded questions.
-    @app.route("/upload/question", methods=["POST"])
-    def upload_questions():
-        arguments_batch = request.get_json()
+    def upload_questions(arguments_batch):
         arguments_list = arguments_batch["arguments"]
         logging.debug(f"arguments_list = {arguments_list!r}")
 

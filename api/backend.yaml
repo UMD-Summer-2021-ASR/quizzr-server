@@ -14,50 +14,6 @@ servers:
 paths:
   /answer:
     get:
-      summary: Get Recorded Question
-      tags: []
-      responses:
-        '200':
-          description: Question Found
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  id:
-                    $ref: '#/components/schemas/Audio-Id'
-                  vtt:
-                    $ref: '#/components/schemas/VTT'
-                  qid:
-                    $ref: '#/components/schemas/Str-ObjectId'
-                required:
-                  - id
-                  - vtt
-                  - qid
-        '404':
-          description: Question Not Found
-        '500':
-          description: Internal Server Error
-          content:
-            application/json:
-              schema:
-                description: ''
-                type: object
-                x-examples:
-                  example-1:
-                    err: rec_not_found
-                properties:
-                  err:
-                    type: string
-                    enum:
-                      - rec_not_found
-                required:
-                  - err
-      operationId: pick_game_question
-      description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
-      parameters: []
-  /answer/check:
-    get:
       summary: Check an Answer
       tags: []
       responses:
@@ -83,8 +39,63 @@ paths:
           name: qid
           description: The ID of the question selected
       description: Check if the user's answer approximately matches the stored answer of the associated question.
-  /audio/processed:
-    post:
+  /audio:
+    get:
+      summary: Get Unprocessed Audio Batch
+      tags: []
+      responses:
+        '200':
+          description: Document Batch Found
+          content:
+            application/json:
+              schema:
+                description: ''
+                type: object
+                x-examples:
+                  example-1:
+                    results:
+                      - _id: 1l77laMyEVIit3_AP7v_YQBxe9RQvJ4zT
+                        transcript: The quick brown fox jumps over the lazy dog.
+                      - _id: 1IirF6ac4p-_A7zyXuDWYIzWpNUUjKbt1
+                        transcript: Hello world.
+                properties:
+                  results:
+                    type: array
+                    uniqueItems: true
+                    minItems: 1
+                    items:
+                      type: object
+                      properties:
+                        _id:
+                          $ref: '#/components/schemas/Audio-Id'
+                        transcript:
+                          type: string
+                          minLength: 1
+                        diarMetadata:
+                          type: string
+                      required:
+                        - _id
+                        - transcript
+                  errors:
+                    $ref: '#/components/schemas/Errors'
+                required:
+                  - results
+              examples:
+                Sample Response:
+                  value:
+                    results:
+                      - _id: 1kjgKmxnvj758JhgsjLjY3_-jck9xLbV1
+                        transcript: The quick brown fox jumps over the lazy dog.
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorMsg'
+      operationId: get_unprocessed_audio
+      description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
+      parameters: []
+    patch:
       summary: Add Processed Audio Data
       tags: []
       responses:
@@ -158,129 +169,6 @@ paths:
         description: A batch of results from processing audio files.
       description: Update a batch of audio files with results from processing them.
       parameters: []
-  /audio/unprocessed:
-    parameters: []
-    get:
-      summary: Get Unprocessed Audio Batch
-      tags: []
-      responses:
-        '200':
-          description: Document Batch Found
-          content:
-            application/json:
-              schema:
-                description: ''
-                type: object
-                x-examples:
-                  example-1:
-                    results:
-                      - _id: 1l77laMyEVIit3_AP7v_YQBxe9RQvJ4zT
-                        transcript: The quick brown fox jumps over the lazy dog.
-                      - _id: 1IirF6ac4p-_A7zyXuDWYIzWpNUUjKbt1
-                        transcript: Hello world.
-                properties:
-                  results:
-                    type: array
-                    uniqueItems: true
-                    minItems: 1
-                    items:
-                      type: object
-                      properties:
-                        _id:
-                          $ref: '#/components/schemas/Audio-Id'
-                        transcript:
-                          type: string
-                          minLength: 1
-                        diarMetadata:
-                          type: string
-                      required:
-                        - _id
-                        - transcript
-                  errors:
-                    $ref: '#/components/schemas/Errors'
-                required:
-                  - results
-              examples:
-                Sample Response:
-                  value:
-                    results:
-                      - _id: 1kjgKmxnvj758JhgsjLjY3_-jck9xLbV1
-                        transcript: The quick brown fox jumps over the lazy dog.
-        '404':
-          description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorMsg'
-      operationId: get_unprocessed_audio
-      description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
-      parameters: []
-  '/download/{blob_path}':
-    parameters:
-      - $ref: '#/components/parameters/BlobPath'
-    get:
-      summary: Get Recording
-      tags: []
-      responses:
-        '200':
-          description: Recording Found
-          content:
-            audio/wav:
-              schema:
-                type: string
-                format: binary
-          headers: {}
-        '404':
-          description: Not Found
-      operationId: retrieve_audio_file
-      description: Retrieve an audio file from Firebase storage.
-  /record:
-    get:
-      summary: Get Question and Transcript
-      tags: []
-      responses:
-        '200':
-          description: Question Found
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    uniqueItems: true
-                    minItems: 1
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          $ref: '#/components/schemas/Str-ObjectId'
-                        transcript:
-                          type: string
-                      required:
-                        - id
-                        - transcript
-                required:
-                  - results
-        '404':
-          description: Question Not Found
-      operationId: pick_recording_question
-      description: Retrieve a question ID and its associated transcript
-      parameters:
-        - schema:
-            type: integer
-          in: query
-          name: batchSize
-          description: The number of questions to retrieve
-        - schema:
-            type: integer
-            minimum: 0
-            maximum: 2
-          in: query
-          name: difficultyType
-          description: A difficulty type in enumerated form. Higher numbers are more difficult.
-    parameters: []
-  /upload:
     post:
       summary: Submit Recording
       tags: []
@@ -366,7 +254,114 @@ paths:
                   recType: buzz
         description: The file to upload along with some transaction information.
       description: Pre-screen the given audio file for how accurately it matches to the given question's transcript and upload it to the database if it is accurate enough.
-  /upload/question:
+  '/audio/{blob_path}':
+    parameters:
+      - $ref: '#/components/parameters/BlobPath'
+    get:
+      summary: Get Recording
+      tags: []
+      responses:
+        '200':
+          description: Recording Found
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+          headers: {}
+        '404':
+          description: Not Found
+      operationId: retrieve_audio_file
+      description: Retrieve an audio file from Firebase storage.
+  /question:
+    get:
+      summary: Get Recorded Question
+      tags: []
+      responses:
+        '200':
+          description: Question Found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: '#/components/schemas/Audio-Id'
+                  vtt:
+                    $ref: '#/components/schemas/VTT'
+                  qid:
+                    $ref: '#/components/schemas/Str-ObjectId'
+                required:
+                  - id
+                  - vtt
+                  - qid
+        '404':
+          description: Question Not Found
+        '500':
+          description: Internal Server Error
+          content:
+            application/json:
+              schema:
+                description: ''
+                type: object
+                x-examples:
+                  example-1:
+                    err: rec_not_found
+                properties:
+                  err:
+                    type: string
+                    enum:
+                      - rec_not_found
+                required:
+                  - err
+      operationId: pick_game_question
+      description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
+      parameters: []
+  /question/unrec:
+    get:
+      summary: Get Question and Transcript
+      tags: []
+      responses:
+        '200':
+          description: Question Found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    uniqueItems: true
+                    minItems: 1
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: '#/components/schemas/Str-ObjectId'
+                        transcript:
+                          type: string
+                      required:
+                        - id
+                        - transcript
+                required:
+                  - results
+        '404':
+          description: Question Not Found
+      operationId: pick_recording_question
+      description: Retrieve a question ID and its associated transcript
+      parameters:
+        - schema:
+            type: integer
+          in: query
+          name: batchSize
+          description: The number of questions to retrieve
+        - schema:
+            type: integer
+            minimum: 0
+            maximum: 2
+          in: query
+          name: difficultyType
+          description: A difficulty type in enumerated form. Higher numbers are more difficult.
     post:
       summary: Upload Question Batch
       tags: []
