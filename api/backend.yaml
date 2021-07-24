@@ -1,9 +1,12 @@
 openapi: 3.1.0
 info:
-  title: backend
-  version: '1.0'
-  summary: API for the Flask Server
-  description: ''
+  title: Quizzr.io Data Flow Server
+  version: '0.2.0'
+  summary: API for the Flask data flow server
+  description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
+  contact:
+    name: Christopher Rapp
+    email: christopher.michael.rapp@gmail.com
 servers:
   - url: 'http://localhost:3000'
   - url: 'https://quizzr.stoplight.io'
@@ -22,7 +25,7 @@ paths:
                 type: object
                 properties:
                   id:
-                    $ref: '#/components/schemas/GFileID'
+                    $ref: '#/components/schemas/Audio-Id'
                   vtt:
                     $ref: '#/components/schemas/VTT'
                   qid:
@@ -52,7 +55,7 @@ paths:
                   - err
       operationId: pick_game_question
       description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
-    parameters: []
+      parameters: []
   /answer/check:
     get:
       summary: Check an Answer
@@ -121,7 +124,7 @@ paths:
                     type: object
                     properties:
                       _id:
-                        $ref: '#/components/schemas/GFileID'
+                        $ref: '#/components/schemas/Audio-Id'
                       vtt:
                         $ref: '#/components/schemas/VTT'
                       score:
@@ -154,8 +157,7 @@ paths:
                 - arguments
         description: A batch of results from processing audio files.
       description: Update a batch of audio files with results from processing them.
-      parameters:
-        - $ref: '#/components/parameters/Internal-Auth-Token'
+      parameters: []
   /audio/unprocessed:
     parameters: []
     get:
@@ -185,8 +187,7 @@ paths:
                       type: object
                       properties:
                         _id:
-                          minLength: 1
-                          type: string
+                          $ref: '#/components/schemas/Audio-Id'
                         transcript:
                           type: string
                           minLength: 1
@@ -213,11 +214,10 @@ paths:
                 $ref: '#/components/schemas/ErrorMsg'
       operationId: get_unprocessed_audio
       description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
-      parameters:
-        - $ref: '#/components/parameters/Internal-Auth-Token'
-  '/download/{gfile_id}':
+      parameters: []
+  '/download/{blob_path}':
     parameters:
-      - $ref: '#/components/parameters/GFileID'
+      - $ref: '#/components/parameters/BlobPath'
     get:
       summary: Get Recording
       tags: []
@@ -225,15 +225,15 @@ paths:
         '200':
           description: Recording Found
           content:
-            application/ogg:
+            audio/wav:
               schema:
-                type: object
-                properties: {}
+                type: string
+                format: binary
           headers: {}
         '404':
           description: Not Found
       operationId: retrieve_audio_file
-      description: Retrieve an audio file from Google Drive.
+      description: Retrieve an audio file from Firebase storage.
   /record:
     get:
       summary: Get Question and Transcript
@@ -331,7 +331,8 @@ paths:
               type: object
               properties:
                 audio:
-                  $ref: '#/components/schemas/File'
+                  type: string
+                  format: binary
                 qid:
                   $ref: '#/components/schemas/Str-ObjectId'
                 recType:
@@ -344,21 +345,24 @@ paths:
               required:
                 - audio
                 - recType
+            encoding:
+              audio:
+                contentType: audio/wav
             examples:
               user-submission:
                 value:
-                  audio: {}
+                  audio: QBQuestionRec
                   qid: 81d04b85a09490e12cde7bfc
                   recType: normal
               admin-submission:
                 value:
-                  audio: {}
+                  audio: DiarizationTest
                   qid: 81d04b85a09490e12cde7bfc
                   recType: normal
                   diarMetadata: 'detect_num_speakers=False, max_num_speakers=3'
               user-buzz-submission:
                 value:
-                  audio: {}
+                  audio: BuzzRec
                   recType: buzz
         description: The file to upload along with some transaction information.
       description: Pre-screen the given audio file for how accurately it matches to the given question's transcript and upload it to the database if it is accurate enough.
@@ -413,24 +417,9 @@ paths:
                       answer: John C. Fremont
                       recDifficulty: 4
         description: A batch of unrecorded question documents.
-      parameters:
-        - $ref: '#/components/parameters/Internal-Auth-Token'
+      parameters: []
 components:
   schemas:
-    ObjectId:
-      type: object
-      title: ObjectId
-      description: ObjectId from BSON
-      minProperties: 1
-      maxProperties: 1
-      properties:
-        $oid:
-          type: string
-          minLength: 24
-          maxLength: 24
-          pattern: '^[0-9a-f]+'
-      required:
-        - $oid
     Str-ObjectId:
       type: string
       title: Str-ObjectId
@@ -438,17 +427,6 @@ components:
       maxLength: 24
       pattern: '^[0-9a-f]+'
       description: String representation of an ObjectId
-    File:
-      title: File
-      type: object
-      description: ''
-    GFileID:
-      type: string
-      title: GFileID
-      description: ID for a Google Drive File
-      maxLength: 33
-      minLength: 33
-      pattern: '^1[A-Za-z0-9\-_]+'
     VTT:
       title: VTT
       type: string
@@ -460,7 +438,7 @@ components:
     Errors:
       title: Errors
       type: array
-      description: A list of error messages to send to the end user
+      description: A list of error messages to send to the end user (of the API)
       items:
         type: object
         properties:
@@ -474,29 +452,18 @@ components:
         required:
           - type
           - reason
+    Audio-Id:
+      title: Audio-Id
+      type: string
+      description: The ID of an audio document
   parameters:
-    GFileID:
-      name: gfile_id
+    BlobPath:
+      name: blob_path
       in: path
       required: true
       schema:
         type: string
-        pattern: '^1[A-Za-z0-9\-_]+'
-        minLength: 33
-        maxLength: 33
-      description: The ID of a file in Google Drive
-    Auth-Token:
-      name: Authentication Token
-      in: header
-      required: true
-      schema:
-        type: string
-      description: An authentication token to use for requests made by a user
-    Internal-Auth-Token:
-      name: Internal-Auth-Token
-      in: header
-      required: false
-      schema:
-        type: string
-      description: An authentication token for requests between back-end components
+        format: uri
+      description: The path to a Firebase Cloud Storage object in the format `<recType>/<_id>`
+      allowReserved: true
   responses: {}
