@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: '0.2.0'
+  version: 0.2.0
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -26,6 +26,7 @@ paths:
                 properties:
                   correct:
                     type: boolean
+              examples: {}
       operationId: check_answer
       parameters:
         - schema:
@@ -81,11 +82,13 @@ paths:
                 required:
                   - results
               examples:
-                Sample Response:
+                example-1:
                   value:
                     results:
-                      - _id: 1kjgKmxnvj758JhgsjLjY3_-jck9xLbV1
-                        transcript: The quick brown fox jumps over the lazy dog.
+                      - _id: sFHPiWfpRae5C2-5v7tCjAvZzPDB5sr4w6WODxCZilo
+                        transcript: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.'
+                      - _id: C0cb6nKK5nQ8I12T4O4590hnnOPMm_Lxf7D9r7ZTrD4
+                        transcript: Justo donec enim diam vulputate ut pharetra sit amet. Risus feugiat in ante metus dictum at. Faucibus et molestie ac feugiat sed. Eu mi bibendum neque egestas congue quisque egestas diam in. Et tortor at risus viverra adipiscing at in tellus integer. Leo duis ut diam quam nulla porttitor massa id neque. Euismod in pellentesque massa placerat duis ultricies lacus sed turpis.
         '404':
           description: Not Found
           content:
@@ -156,6 +159,7 @@ paths:
                             description: Word Information Lost
                       batchNumber:
                         type: string
+                        format: date
                       metadata:
                         type: string
                     required:
@@ -166,6 +170,31 @@ paths:
                       - metadata
               required:
                 - arguments
+            examples:
+              example-1:
+                value:
+                  arguments:
+                    - _id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+                      vtt: |-
+                        WEBVTT Kind: captions; Language: en
+
+                        00:00:00.012345 --> 00:00:01.123456
+                        <v Speaker 1>WORD1
+
+                        00:00:01.123456 --> 00:00:02.123456
+                        <v Speaker 1>WORD2
+
+                        00:01:00.012345 --> 00:01:01.123456
+                        <v Speaker 2>WORD3
+
+                        00:01:01.123456 --> 00:01:02.123456
+                        <v Speaker 2>WORD4
+                      score:
+                        wer: 1.124235
+                        mer: 1
+                        wil: 1
+                      batchNumber: '2019-08-24'
+                      metadata: 'detect_num_speakers=False, max_num_speakers=3'
         description: A batch of results from processing audio files.
       description: Update a batch of audio files with results from processing them.
       parameters: []
@@ -268,6 +297,7 @@ paths:
               schema:
                 type: string
                 format: binary
+              examples: {}
           headers: {}
         '404':
           description: Not Found
@@ -295,6 +325,25 @@ paths:
                   - id
                   - vtt
                   - qid
+              examples:
+                example-1:
+                  value:
+                    id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+                    vtt: |-
+                      WEBVTT Kind: captions; Language: en
+
+                      00:00:00.012345 --> 00:00:01.123456
+                      <v Speaker 1>WORD1
+
+                      00:00:01.123456 --> 00:00:02.123456
+                      <v Speaker 1>WORD2
+
+                      00:01:00.012345 --> 00:01:01.123456
+                      <v Speaker 2>WORD3
+
+                      00:01:01.123456 --> 00:01:02.123456
+                      <v Speaker 2>WORD4
+                    qid: 9174ea6cb092348d950a2f65
         '404':
           description: Question Not Found
         '500':
@@ -345,6 +394,12 @@ paths:
                         - transcript
                 required:
                   - results
+              examples:
+                example-1:
+                  value:
+                    results:
+                      - id: 9174ea6cb092348d950a2f65
+                        transcript: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ultrices sagittis orci a scelerisque purus. Vehicula ipsum a arcu cursus. Dis parturient montes nascetur ridiculus mus mauris vitae ultricies leo. In dictum non consectetur a erat nam at lectus. At augue eget arcu dictum. Bibendum neque egestas congue quisque egestas diam in arcu. Eget nullam non nisi est. Praesent elementum facilisis leo vel fringilla est ullamcorper. Aliquet risus feugiat in ante.'
         '404':
           description: Question Not Found
       operationId: pick_recording_question
@@ -422,18 +477,40 @@ components:
       maxLength: 24
       pattern: '^[0-9a-f]+'
       description: String representation of an ObjectId
+      examples:
+        - 9174ea6cb092348d950a2f65
     VTT:
       title: VTT
       type: string
       description: The contents of a VTT file
+      examples:
+        - |-
+          WEBVTT Kind: captions; Language: en
+
+          00:00:00.012345 --> 00:00:01.123456
+          <v Speaker 1>WORD1
+
+          00:00:01.123456 --> 00:00:02.123456
+          <v Speaker 1>WORD2
+
+          00:01:00.012345 --> 00:01:01.123456
+          <v Speaker 2>WORD3
+
+          00:01:01.123456 --> 00:01:02.123456
+          <v Speaker 2>WORD4
     ErrorMsg:
       title: Error
       type: string
       description: A machine-readable error message
+      examples:
+        - unrec_invalid_qids
     Errors:
       title: Errors
       type: array
       description: A list of error messages to send to the end user (of the API)
+      examples:
+        - - type: bad_request
+            reason: arg_foo_undefined
       items:
         type: object
         properties:
@@ -443,14 +520,17 @@ components:
               - bad_request
               - internal_error
           reason:
-            type: string
+            $ref: '#/components/schemas/ErrorMsg'
         required:
           - type
           - reason
     Audio-Id:
-      title: Audio-Id
       type: string
+      title: Audio-Id
       description: The ID of an audio document
+      examples: []
+      pattern: '^[A-Za-z0-9 -_]+'
+      example: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
   parameters:
     BlobPath:
       name: blob_path
