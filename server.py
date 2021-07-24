@@ -34,7 +34,6 @@ def create_app(test_overrides=None, test_inst_path=None):
     path = app.instance_path
     default_config = {
         "UNPROC_FIND_LIMIT": 32,
-        "REC_QUEUE_LIMIT": 32,
         "DATABASE": "QuizzrDatabase",
         "BLOB_ROOT": "production",
         "BLOB_NAME_LENGTH": 32,
@@ -42,7 +41,13 @@ def create_app(test_overrides=None, test_inst_path=None):
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
         "VERSION": "0.2.0",
-        "MIN_ANSWER_SIMILARITY": 50
+        "MIN_ANSWER_SIMILARITY": 50,
+        "PROC_CONFIG": {
+            "checkUnk": True,
+            "unkToken": "<unk>",
+            "minAccuracy": 0.5,
+            "queueLimit": 32
+        }
     }
 
     config_dir = os.path.join(path, "config")
@@ -79,7 +84,12 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     app.config.from_mapping(app_conf)
     qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir)
-    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"])
+    qp = rec_processing.QuizzrProcessor(
+        qtpm.database,
+        rec_dir,
+        app_conf["PROC_CONFIG"],
+        app_conf["SUBMISSION_FILE_TYPES"]
+    )
     # TODO: multiprocessing
 
     # Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB Atlas.
@@ -276,11 +286,11 @@ def create_app(test_overrides=None, test_inst_path=None):
         logging.debug(f"diarization_metadata = {diarization_metadata!r}")
         logging.debug(f"rec_type = {rec_type!r}")
 
-        if recording is None:
+        if not recording:
             logging.error("No audio recording defined. Aborting")
             return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
 
-        if rec_type is None:
+        if not rec_type:
             logging.error("Form argument 'recType' is undefined. Aborting")
             return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
         elif rec_type not in valid_rec_types:
@@ -291,7 +301,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         question_id, success = error_handling.to_oid_soft(question_id)
         if qid_used:
-            if qid_required and question_id is None:
+            if qid_required and not question_id:
                 logging.error("Form argument 'qid' expected. Aborting")
                 return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
             if not success:
@@ -330,7 +340,10 @@ def create_app(test_overrides=None, test_inst_path=None):
             #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
             # )
             results = qp.pick_submissions(
-                rec_processing.QuizzrWatcher.queue_submissions(app.config["REC_DIR"], size_limit=app.config["REC_QUEUE_LIMIT"])
+                rec_processing.QuizzrWatcher.queue_submissions(
+                    app.config["REC_DIR"],
+                    size_limit=app.config["PROC_CONFIG"]["queueLimit"]
+                )
             )
         except BrokenPipeError as e:
             logging.error(f"Encountered BrokenPipeError: {e}. Aborting")

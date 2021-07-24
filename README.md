@@ -33,7 +33,6 @@ To run the server in debug mode, set `FLASK_ENV` to `development` in the termina
 Creating a JSON file named `sv_config.json` in the `config` subdirectory of the instance path allows for specifying a set of overrides to merge on top of the default configuration.
  All configuration fields must use purely capital letters to be recognized by the server. The following is a list of configuration fields and their descriptions:
 * `UNPROC_FIND_LIMIT` The maximum number of unprocessed audio documents to find in a single batch.
-* `REC_QUEUE_LIMIT` The maximum number of submissions to pre-screen at once.
 * `DATABASE` The name of the database to use in MongoDB.
 * `BLOB_ROOT` The name of the root folder to use in Firebase Storage.
 * `BLOB_NAME_LENGTH` The length of the string to generate when naming uploaded audio files.
@@ -41,6 +40,12 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
 * `DIFFICULTY_LIMITS` The upper bound of each difficulty, or `null` to have no upper bound.
 * `VERSION` The version of the software. Used in audio document definitions for cases where the schema changes.
+* `MIN_ANSWER_SIMILARITY` The program marks a given answer at the `/answer` `GET` endpoint as correct if the similarity between the answer and the correct answer exceeds this value.
+* `PROC_CONFIG` Configuration for the recording processor. Includes:
+  * `checkUnk` Check for unknown words along with unaligned words when calculating accuracy.
+  * `unkToken` The value of the aligned word to look for when detecting out-of-vocabulary words.
+  * `minAccuracy` The minimum acceptable accuracy of a submission.
+  * `queueLimit` The maximum number of submissions to pre-screen at once.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
