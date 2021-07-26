@@ -7,7 +7,7 @@ The Quizzr.io data flow server functions as the central piece of the back-end, h
 Prior to installation, you will need to have `pip` installed.
 1. Clone this repository.
 1. Install all the necessary dependencies by executing `pip install -r requirements.txt` in the folder of the repository. It may be a good idea to set up a virtual environment prior to doing this step to avoid conflicts with already installed packages.
-1. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the associated README.md document. If you are installing it through the source code on a Linux operating system, you may need to change `install_deps.sh` to be based on your distribution.
+1. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the associated README.md document. If you are installing it through the source code on a Linux operating system, you may need to change `install_deps.sh` to be based on your distribution. You will need to modify the `wget` command in `install_models.sh` to include the `--no-check-certificate` flag because the certificate for accessing `https://www.lowerquality.com` has expired.
 1. Create a directory for the instance path of the server. By default, it is `~/quizzr_server`, but it can be overridden by the `Q_INST_PATH` environment variable or the `test_inst_path` parameter in the app factory function, `create_app`. In the instance path, create another directory called `secrets`.
 1. Login to the Quizzr Google Account on Firebase and navigate to the Project settings --> Service accounts. Generate a private key for the Firebase Admin SDK service account and store it at `secrets/firebase_storage_key.json`.
 
@@ -33,7 +33,6 @@ To run the server in debug mode, set `FLASK_ENV` to `development` in the termina
 Creating a JSON file named `sv_config.json` in the `config` subdirectory of the instance path allows for specifying a set of overrides to merge on top of the default configuration.
  All configuration fields must use purely capital letters to be recognized by the server. The following is a list of configuration fields and their descriptions:
 * `UNPROC_FIND_LIMIT` The maximum number of unprocessed audio documents to find in a single batch.
-* `REC_QUEUE_LIMIT` The maximum number of submissions to pre-screen at once.
 * `DATABASE` The name of the database to use in MongoDB.
 * `BLOB_ROOT` The name of the root folder to use in Firebase Storage.
 * `BLOB_NAME_LENGTH` The length of the string to generate when naming uploaded audio files.
@@ -41,6 +40,13 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
 * `DIFFICULTY_LIMITS` The upper bound of each difficulty, or `null` to have no upper bound.
 * `VERSION` The version of the software. Used in audio document definitions for cases where the schema changes.
+* `MIN_ANSWER_SIMILARITY` The program marks a given answer at the `/answer` `GET` endpoint as correct if the similarity between the answer and the correct answer exceeds this value.
+* `PROC_CONFIG` Configuration for the recording processor. Includes:
+  * `checkUnk` Check for unknown words along with unaligned words when calculating accuracy.
+  * `unkToken` The value of the aligned word to look for when detecting out-of-vocabulary words.
+  * `minAccuracy` The minimum acceptable accuracy of a submission.
+  * `queueLimit` The maximum number of submissions to pre-screen at once.
+* `VERIFY_AUTH_TOKENS` The program blocks access to certain resources for users not properly authenticated in Firebase if this field is `true`.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 

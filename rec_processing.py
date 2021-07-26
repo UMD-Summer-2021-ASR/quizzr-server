@@ -4,7 +4,6 @@ import os
 import re
 import signal
 
-import gentle
 import sys
 import time
 from typing import List, Dict, Union
@@ -55,8 +54,9 @@ class QuizzrWatcher:
 
 
 class QuizzrProcessor:
-    def __init__(self, database, directory: str, version: str):
-        self.VERSION = version
+    def __init__(self, database, directory, config, submission_file_types):
+        self.submission_file_types = submission_file_types
+        self.config = config
         self.DIRECTORY = directory
         self.SUBMISSION_FILE_TYPES = ["wav", "json", "vtt"]
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
@@ -69,7 +69,6 @@ class QuizzrProcessor:
 
         self.punc_regex = re.compile(r"[.?!,;:\"\-]")
         self.whitespace_regex = re.compile(r"\s+")
-        self.ACCURACY_CUTOFF = 0.5  # Hyperparameter
         self.ERROR_ACCURACY = -1.0
 
     # Pre-screen all given normal submissions and return the ones that passed the pre-screening.
@@ -87,14 +86,15 @@ class QuizzrProcessor:
             for submission in typed_submissions['normal']:
                 if "err" in results[submission]:
                     final_results[submission] = {"case": "err", "err": results[submission]["err"]}
-                elif results[submission]["accuracy"] < self.ACCURACY_CUTOFF:
-                    final_results[submission] = {"case": "rejected"}
-                    delete_submission(self.DIRECTORY, submission, self.SUBMISSION_FILE_TYPES)
+                elif results[submission]["accuracy"] < self.config["minAccuracy"]:
+                    final_results[submission] = {"case": "rejected", "accuracy": results[submission]["accuracy"]}
+                    delete_submission(self.DIRECTORY, submission, self.submission_file_types)
                 else:
                     final_results[submission] = {
                         "case": "accepted",
                         "vtt": results[submission]["vtt"],
-                        "metadata": sub2meta[submission]
+                        "metadata": sub2meta[submission],
+                        "accuracy": results[submission]["accuracy"]
                     }
                     num_accepted_submissions += 1
             logging.info(f"Accepted {num_accepted_submissions} of {len(typed_submissions['normal'])} submission(s)")
@@ -167,7 +167,7 @@ class QuizzrProcessor:
         return results
 
     # ****************** HELPER METHODS *********************
-    # Do a forced alignment and return the percentage of words aligned along with the VTT.
+    # Do a forced alignment and return the percentage of words aligned (or known) along with the VTT.
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
         total_words = len(self.process_transcript(r_transcript))
         total_aligned_words = 0
@@ -178,7 +178,8 @@ class QuizzrProcessor:
             return None, None
         words = alignment.words
         for word_data in words:
-            if word_data.case == "success":
+            unk = self.config["checkUnk"] and word_data.alignedWord == self.config["unkToken"]
+            if word_data.case == "success" and not unk:
                 total_aligned_words += 1
         vtt = vtt_conversion.gentle_alignment_to_vtt(words)
 
@@ -200,6 +201,7 @@ class QuizzrProcessor:
         return sub2meta
 
     @staticmethod
+    # Divide the submissions by the recording type.
     def categorize_submissions(submissions, sub2meta):
         typed_submissions = {}
         for submission in submissions:

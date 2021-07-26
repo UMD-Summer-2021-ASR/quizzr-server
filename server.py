@@ -4,6 +4,8 @@ import os
 import random
 from datetime import datetime
 from http import HTTPStatus
+
+from firebase_admin import auth
 from fuzzywuzzy import fuzz
 
 import bson.json_util
@@ -34,7 +36,6 @@ def create_app(test_overrides=None, test_inst_path=None):
     path = app.instance_path
     default_config = {
         "UNPROC_FIND_LIMIT": 32,
-        "REC_QUEUE_LIMIT": 32,
         "DATABASE": "QuizzrDatabase",
         "BLOB_ROOT": "production",
         "BLOB_NAME_LENGTH": 32,
@@ -42,7 +43,14 @@ def create_app(test_overrides=None, test_inst_path=None):
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
         "VERSION": "0.2.0",
-        "MIN_ANSWER_SIMILARITY": 50
+        "MIN_ANSWER_SIMILARITY": 50,
+        "PROC_CONFIG": {
+            "checkUnk": True,
+            "unkToken": "<unk>",
+            "minAccuracy": 0.5,
+            "queueLimit": 32
+        },
+        "VERIFY_AUTH_TOKENS": True
     }
 
     config_dir = os.path.join(path, "config")
@@ -74,12 +82,14 @@ def create_app(test_overrides=None, test_inst_path=None):
     app_conf["SERVER_DIR"] = server_dir
     app_conf["REC_DIR"] = rec_dir
 
-    if app_conf["Q_ENV"] == "production":
-        logging.warning("Using the production environment in development is heavily discouraged")
-
     app.config.from_mapping(app_conf)
     qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir)
-    qp = rec_processing.QuizzrProcessor(qtpm.database, rec_dir, app_conf["VERSION"])
+    qp = rec_processing.QuizzrProcessor(
+        qtpm.database,
+        rec_dir,
+        app_conf["PROC_CONFIG"],
+        app_conf["SUBMISSION_FILE_TYPES"]
+    )
     # TODO: multiprocessing
 
     # Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB Atlas.
@@ -88,6 +98,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         if request.method == "GET":
             return get_unprocessed_audio()
         elif request.method == "POST":
+            _verify_id_token()
             recording = request.files.get("audio")
             question_id = request.form.get("qid")
             diarization_metadata = request.form.get("diarMetadata")
@@ -102,19 +113,19 @@ def create_app(test_overrides=None, test_inst_path=None):
         errs = []
         results_projection = ["_id", "diarMetadata"]  # In addition to the transcript
 
-        logging.info(f"Finding a batch ({max_docs} max) of unprocessed audio documents...")
+        app.logger.info(f"Finding a batch ({max_docs} max) of unprocessed audio documents...")
         audio_doc_count = qtpm.unproc_audio.count_documents({"_id": {"$exists": True}}, limit=max_docs)
         if audio_doc_count == 0:
-            logging.error("Could not find any audio documents")
+            app.logger.error("Could not find any audio documents")
             return "empty_unproc_audio", HTTPStatus.NOT_FOUND
         audio_cursor = qtpm.unproc_audio.find(limit=max_docs)
         qid2entries = {}
         for audio_doc in audio_cursor:
-            logging.debug(f"audio_doc = {audio_doc!r}")
+            app.logger.debug(f"audio_doc = {audio_doc!r}")
 
             qid = audio_doc.get("questionId")
             if qid is None:
-                logging.warning("Audio document does not contain question ID")
+                app.logger.warning("Audio document does not contain question ID")
                 errs.append(("internal_error", "undefined_question_id"))
                 continue
             if qid not in qid2entries:
@@ -126,10 +137,10 @@ def create_app(test_overrides=None, test_inst_path=None):
             qid2entries[qid].append(entry)
 
         qids = list(qid2entries.keys())
-        logging.debug(f"qid2entries = {qid2entries!r}")
-        logging.info(f"Found {audio_doc_count} unprocessed audio document(s)")
+        app.logger.debug(f"qid2entries = {qid2entries!r}")
+        app.logger.info(f"Found {audio_doc_count} unprocessed audio document(s)")
         if not qids:
-            logging.error("No audio documents contain question IDs")
+            app.logger.error("No audio documents contain question IDs")
             return "empty_qid2entries", HTTPStatus.NOT_FOUND
 
         questions = qtpm.find_questions(qids)
@@ -141,12 +152,12 @@ def create_app(test_overrides=None, test_inst_path=None):
                 for entry in entries:
                     entry["transcript"] = transcript
 
-        logging.debug(f"qid2entries = {qid2entries!r}")
+        app.logger.debug(f"qid2entries = {qid2entries!r}")
 
         results = []
         for entries in qid2entries.values():
             results += entries
-        logging.debug(f"Final Results: {results!r}")
+        app.logger.debug(f"Final Results: {results!r}")
         response = {"results": results}
         if errs:
             response["errors"] = [{"type": err[0], "reason": err[1]} for err in errs]
@@ -158,7 +169,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         arguments_list = arguments_batch.get("arguments")
         if arguments_list is None:
             return "undefined_arguments", HTTPStatus.BAD_REQUEST
-        logging.info(f"Updating data related to {len(arguments_list)} audio documents...")
+        app.logger.info(f"Updating data related to {len(arguments_list)} audio documents...")
         errors = []
         success_count = 0
         for arguments in arguments_list:
@@ -171,13 +182,14 @@ def create_app(test_overrides=None, test_inst_path=None):
         results = {"successes": success_count, "total": len(arguments_list)}
         if errors:
             results["errors"] = errors
-        logging.info(f"Successfully updated data related to {success_count} of {len(arguments_list)} audio documents")
-        logging.info(f"Logged {len(errors)} warning messages")
+        app.logger.info(f"Successfully updated data related to {success_count} of {len(arguments_list)} audio documents")
+        app.logger.info(f"Logged {len(errors)} warning messages")
         return results
 
     # Check if an answer is correct.
     @app.route("/answer", methods=["GET"])
     def check_answer():
+        _verify_id_token()
         qid = request.args.get("qid")
         user_answer = request.args.get("a")
 
@@ -196,22 +208,24 @@ def create_app(test_overrides=None, test_inst_path=None):
     # Retrieve a file from Firebase Storage.
     @app.route("/audio/<path:blob_path>", methods=["GET"])
     def retrieve_audio_file(blob_path):
+        _verify_id_token()
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
     # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
     @app.route("/question", methods=["GET"])
     def pick_game_question():
+        _verify_id_token()
         question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
         if not question_ids:
-            logging.error("No recorded questions found. Aborting")
+            app.logger.error("No recorded questions found. Aborting")
             return "rec_empty_qids", HTTPStatus.NOT_FOUND
 
         # question_ids = qtpm.rec_question_ids.copy()
         while True:
             next_question_id = random.choice(question_ids)
             next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
-            logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            logging.debug(f"next_question = {next_question!r}")
+            app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
+            app.logger.debug(f"next_question = {next_question!r}")
 
             if next_question and next_question.get("recordings"):
                 audio = qtpm.find_best_audio_doc(
@@ -220,11 +234,11 @@ def create_app(test_overrides=None, test_inst_path=None):
                 )
                 if audio:
                     break
-            logging.warning(
+            app.logger.warning(
                 f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
             question_ids.remove(next_question_id)
             if not question_ids:
-                logging.error("Failed to find a viable recorded question. Aborting")
+                app.logger.error("Failed to find a viable recorded question. Aborting")
                 return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
         result = audio.copy()
         result["qid"] = str(next_question_id)
@@ -234,6 +248,7 @@ def create_app(test_overrides=None, test_inst_path=None):
     @app.route("/question/unrec", methods=["GET", "POST"])
     def unrec_question_resource():
         if request.method == "GET":
+            _verify_id_token()
             difficulty = request.args.get("difficultyType")
             batch_size = request.args.get("batchSize")
             return pick_recording_question(difficulty, batch_size)
@@ -250,7 +265,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         question_ids = QuizzrTPM.get_ids(qtpm.unrec_questions, difficulty_query)
         if not question_ids:
-            logging.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
+            app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
         errors = []
@@ -272,47 +287,47 @@ def create_app(test_overrides=None, test_inst_path=None):
     def pre_screen(recording, question_id, diarization_metadata, rec_type):
         valid_rec_types = ["normal", "buzz"]
 
-        logging.debug(f"question_id = {question_id!r}")
-        logging.debug(f"diarization_metadata = {diarization_metadata!r}")
-        logging.debug(f"rec_type = {rec_type!r}")
+        app.logger.debug(f"question_id = {question_id!r}")
+        app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
+        app.logger.debug(f"rec_type = {rec_type!r}")
 
-        if recording is None:
-            logging.error("No audio recording defined. Aborting")
+        if not recording:
+            app.logger.error("No audio recording defined. Aborting")
             return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
 
-        if rec_type is None:
-            logging.error("Form argument 'recType' is undefined. Aborting")
+        if not rec_type:
+            app.logger.error("Form argument 'recType' is undefined. Aborting")
             return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
         elif rec_type not in valid_rec_types:
-            logging.error(f"Invalid rec type {rec_type!r}. Aborting")
+            app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
             return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
         qid_required = rec_type != "buzz"
         qid_used = qid_required or rec_type != "buzz"  # Redundant but for flexibility
 
         question_id, success = error_handling.to_oid_soft(question_id)
         if qid_used:
-            if qid_required and question_id is None:
-                logging.error("Form argument 'qid' expected. Aborting")
+            if qid_required and not question_id:
+                app.logger.error("Form argument 'qid' expected. Aborting")
                 return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
             if not success:
-                logging.error("Form argument 'qid' is not a valid ObjectId. Aborting")
+                app.logger.error("Form argument 'qid' is not a valid ObjectId. Aborting")
                 return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
 
         user_ids = QuizzrTPM.get_ids(qtpm.users)
         if not user_ids:
-            logging.error("No user IDs found. Aborting")
+            app.logger.error("No user IDs found. Aborting")
             return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
         # user_ids = qtpm.user_ids.copy()
         while True:
             user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
             if success:
                 break
-            logging.warning(f"Found malformed user ID {user_id}. Retrying...")
+            app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
             user_ids.remove(user_id)
             if not user_ids:
-                logging.warning("Could not find properly formed user IDs. Proceeding with last choice")
+                app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
                 break
-        logging.debug(f"user_id = {user_id!r}")
+        app.logger.debug(f"user_id = {user_id!r}")
 
         metadata = {
             "recType": rec_type,
@@ -324,16 +339,19 @@ def create_app(test_overrides=None, test_inst_path=None):
             metadata["questionId"] = question_id
 
         submission_name = _save_recording(rec_dir, recording, metadata)
-        logging.debug(f"submission_name = {submission_name!r}")
+        app.logger.debug(f"submission_name = {submission_name!r}")
         try:
             # accepted_submissions, errors = qp.pick_submissions(
             #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
             # )
             results = qp.pick_submissions(
-                rec_processing.QuizzrWatcher.queue_submissions(app.config["REC_DIR"], size_limit=app.config["REC_QUEUE_LIMIT"])
+                rec_processing.QuizzrWatcher.queue_submissions(
+                    app.config["REC_DIR"],
+                    size_limit=app.config["PROC_CONFIG"]["queueLimit"]
+                )
             )
         except BrokenPipeError as e:
-            logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
+            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
         # Upload files
@@ -352,7 +370,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             file2blob = qtpm.upload_many(normal_file_paths, "normal")
             file2blob.update(qtpm.upload_many(buzz_file_paths, "buzz"))
         except BrokenPipeError as e:
-            logging.error(f"Encountered BrokenPipeError: {e}. Aborting")
+            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
         # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
@@ -388,11 +406,11 @@ def create_app(test_overrides=None, test_inst_path=None):
     # Upload a batch of unrecorded questions.
     def upload_questions(arguments_batch):
         arguments_list = arguments_batch["arguments"]
-        logging.debug(f"arguments_list = {arguments_list!r}")
+        app.logger.debug(f"arguments_list = {arguments_list!r}")
 
-        logging.info(f"Uploading {len(arguments_list)} unrecorded questions...")
+        app.logger.info(f"Uploading {len(arguments_list)} unrecorded questions...")
         qtpm.insert_unrec_questions(arguments_list)
-        logging.info("Successfully uploaded questions")
+        app.logger.info("Successfully uploaded questions")
         return {"msg": "unrec_question.upload_success"}
 
     # DO NOT INCLUDE THE ROUTES BELOW IN DEPLOYMENT
@@ -408,18 +426,35 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     # Write a WAV file and its JSON metadata to disk.
     def _save_recording(directory, recording, metadata):
-        logging.info("Saving recording...")
+        app.logger.info("Saving recording...")
         submission_name = _get_next_submission_name()
-        logging.debug(f"submission_name = {submission_name!r}")
+        app.logger.debug(f"submission_name = {submission_name!r}")
         submission_path = os.path.join(directory, submission_name)
         recording.save(submission_path + ".wav")
-        logging.info("Saved recording successfully")
+        app.logger.info("Saved recording successfully")
 
-        logging.info("Writing metadata...")
-        logging.debug(f"metadata = {metadata!r}")
+        app.logger.info("Writing metadata...")
+        app.logger.debug(f"metadata = {metadata!r}")
         with open(submission_path + ".json", "w") as transaction_f:
             transaction_f.write(bson.json_util.dumps(metadata))
-        logging.info("Successfully wrote metadata")
+        app.logger.info("Successfully wrote metadata")
         return submission_name
+
+    def _verify_id_token():
+        if not app.config["VERIFY_AUTH_TOKENS"]:
+            return
+        id_token = request.headers.get("Auth-Token")
+        if not id_token:
+            abort(HTTPStatus.UNAUTHORIZED)
+        try:
+            decoded = auth.verify_id_token(id_token)
+        except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError):
+            decoded = None
+            abort(HTTPStatus.UNAUTHORIZED)
+        except auth.CertificateFetchError:
+            decoded = None
+            abort(HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        return decoded
 
     return app
