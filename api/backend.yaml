@@ -39,6 +39,7 @@ paths:
           in: query
           name: qid
           description: The ID of the question selected
+        - $ref: '#/components/parameters/Auth-Token'
       description: Check if the user's answer approximately matches the stored answer of the associated question.
   /audio:
     get:
@@ -240,7 +241,8 @@ paths:
                 required:
                   - err
       operationId: pre_screen
-      parameters: []
+      parameters:
+        - $ref: '#/components/parameters/Auth-Token'
       requestBody:
         content:
           multipart/form-data:
@@ -303,6 +305,8 @@ paths:
           description: Not Found
       operationId: retrieve_audio_file
       description: Retrieve an audio file from Firebase storage.
+      parameters:
+        - $ref: '#/components/parameters/Auth-Token'
   /question:
     get:
       summary: Get Recorded Question
@@ -365,7 +369,8 @@ paths:
                   - err
       operationId: pick_game_question
       description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
-      parameters: []
+      parameters:
+        - $ref: '#/components/parameters/Auth-Token'
   /question/unrec:
     get:
       summary: Get Question and Transcript
@@ -417,6 +422,7 @@ paths:
           in: query
           name: difficultyType
           description: A difficulty type in enumerated form. Higher numbers are more difficult.
+        - $ref: '#/components/parameters/Auth-Token'
     post:
       summary: Upload Question Batch
       tags: []
@@ -541,4 +547,10 @@ components:
         format: uri
       description: The path to a Firebase Cloud Storage object in the format `<recType>/<_id>`
       allowReserved: true
+    Auth-Token:
+      name: Auth-Token
+      in: header
+      schema:
+        type: string
+      description: A Firebase authentication token. Only required if `VERIFY_AUTH_TOKENS` is `true`.
   responses: {}
