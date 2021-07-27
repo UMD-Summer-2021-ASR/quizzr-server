@@ -425,7 +425,7 @@ paths:
       tags:
         - frontend
     delete:
-      summary: ''
+      summary: Remove Profile
       operationId: delete_profile
       responses:
         '200':
@@ -474,7 +474,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Auth-Token'
     patch:
-      summary: Change Profile
+      summary: Change Other Profile
       tags:
         - frontend
       responses:
@@ -526,7 +526,7 @@ paths:
                     $ref: '#/components/schemas/Recording'
         description: The fields to update. Can include any of the properties listed below.
     delete:
-      summary: Remove Profile
+      summary: Remove Other Profile
       tags:
         - frontend
       responses:
