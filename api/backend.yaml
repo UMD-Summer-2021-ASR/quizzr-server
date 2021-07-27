@@ -431,7 +431,7 @@ paths:
       security:
         - Firebase-Auth: []
     delete:
-      summary: ''
+      summary: Remove Profile
       operationId: delete_profile
       responses:
         '200':
@@ -482,7 +482,7 @@ paths:
       security:
         - Firebase-Auth: []
     patch:
-      summary: Change Profile
+      summary: Change Other Profile
       tags:
         - frontend
       responses:
@@ -535,7 +535,7 @@ paths:
       security:
         - Firebase-Auth: []
     delete:
-      summary: Remove Profile
+      summary: Remove Other Profile
       tags:
         - frontend
       responses:
