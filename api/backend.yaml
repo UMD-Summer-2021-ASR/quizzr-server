@@ -41,8 +41,9 @@ paths:
           in: query
           name: qid
           description: The ID of the question selected
-        - $ref: '#/components/parameters/Auth-Token'
       description: Check if the user's answer approximately matches the stored answer of the associated question.
+      security:
+        - Firebase-Auth: []
   /audio:
     get:
       summary: Get Unprocessed Audio Batch
@@ -249,8 +250,7 @@ paths:
                 required:
                   - err
       operationId: pre_screen
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
       requestBody:
         content:
           multipart/form-data:
@@ -293,6 +293,8 @@ paths:
                   recType: buzz
         description: The file to upload along with some transaction information.
       description: Pre-screen the given audio file for how accurately it matches to the given question's transcript and upload it to the database if it is accurate enough.
+      security:
+        - Firebase-Auth: []
   '/audio/{blob_path}':
     parameters:
       - $ref: '#/components/parameters/BlobPath'
@@ -315,8 +317,9 @@ paths:
           description: Not Found
       operationId: retrieve_audio_file
       description: Retrieve an audio file from Firebase storage.
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
   /profile:
     get:
       summary: Get Private Profile
@@ -354,9 +357,10 @@ paths:
         '500':
           description: Internal Server Error
       operationId: get_profile
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
       description: Retrieve all profile information associated with the user specified in the Auth-Token header. This is intended to be called by solely the front-end.
+      security:
+        - Firebase-Auth: []
     post:
       summary: Create Profile
       operationId: create_profile
@@ -390,8 +394,9 @@ paths:
         description: The profile arguments. Extremely limited because this is executed anonymously.
       tags:
         - frontend
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
     patch:
       summary: Update Profile
       operationId: modify_profile
@@ -407,8 +412,7 @@ paths:
         '500':
           description: Internal Server Error
       description: Update the user's profile as the user
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
       requestBody:
         content:
           application/json:
@@ -424,6 +428,8 @@ paths:
         description: The fields to update. Can include any of the properties listed below.
       tags:
         - frontend
+      security:
+        - Firebase-Auth: []
     delete:
       summary: ''
       operationId: delete_profile
@@ -439,8 +445,9 @@ paths:
       description: 'Delete the user''s profile as the user, along with all associated data.'
       tags:
         - frontend
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
   '/profile/{username}':
     parameters:
       - schema:
@@ -471,8 +478,9 @@ paths:
           description: Internal Server Error
       operationId: get_other_profile
       description: Retrieve the public profile of another user
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
     patch:
       summary: Change Profile
       tags:
@@ -492,8 +500,7 @@ paths:
           description: Internal Server Error
       operationId: modify_other_profile
       description: Modify the profile of another user. Can modify any field except `permLevel`. Requires elevated permissions.
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
       requestBody:
         content:
           application/json:
@@ -525,6 +532,8 @@ paths:
                   items:
                     $ref: '#/components/schemas/Recording'
         description: The fields to update. Can include any of the properties listed below.
+      security:
+        - Firebase-Auth: []
     delete:
       summary: Remove Profile
       tags:
@@ -542,8 +551,9 @@ paths:
           description: Internal Server Error
       operationId: delete_other_profile
       description: Deletes another user. Requires elevated permissions.
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
   /question:
     get:
       summary: Get Recorded Question
@@ -608,8 +618,9 @@ paths:
                   - err
       operationId: pick_game_question
       description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
   /question/unrec:
     get:
       summary: Get Question and Transcript
@@ -663,7 +674,8 @@ paths:
           in: query
           name: difficultyType
           description: A difficulty type in enumerated form. Higher numbers are more difficult.
-        - $ref: '#/components/parameters/Auth-Token'
+      security:
+        - Firebase-Auth: []
     post:
       summary: Upload Question Batch
       tags:
@@ -932,13 +944,12 @@ components:
         format: uri
       description: The path to a Firebase Cloud Storage object in the format `<recType>/<_id>`
       allowReserved: true
-    Auth-Token:
-      name: Auth-Token
-      in: header
-      schema:
-        type: string
-      description: A Firebase authentication token. Only required if the server is deployed with `Q_ENV` set to "production".
   responses: {}
+  securitySchemes:
+    Firebase-Auth:
+      type: http
+      scheme: bearer
+      description: A Bearer token sent from Firebase
 tags:
   - name: frontend
   - name: internal
