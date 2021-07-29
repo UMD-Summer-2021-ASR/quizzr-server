@@ -796,7 +796,7 @@ components:
           type: integer
       examples:
         - username: John Doe
-          usernameSpecs: string
+          usernameSpecs: ''
           pfp:
             - 0
           rating: 0
