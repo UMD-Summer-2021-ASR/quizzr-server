@@ -365,8 +365,8 @@ def create_app(test_overrides=None, test_inst_path=None):
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
         """A resource to automatically point to the user's own profile."""
-        # decoded = _verify_id_token()
-        decoded = {"uid": "dev"}
+        decoded = _verify_id_token()
+        # decoded = {"uid": "dev"}
         user_id = decoded["uid"]
         if request.method == "GET":
             return qtpm.get_profile(user_id, "private")
@@ -380,6 +380,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                 return "user_created", HTTPStatus.CREATED
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
         elif request.method == "PATCH":
+            # TODO: Deny permission for modifying unwanted fields.
             update_args = request.get_json()
             result = qtpm.modify_profile(user_id, update_args)
             if result:
@@ -494,9 +495,10 @@ def create_app(test_overrides=None, test_inst_path=None):
         app.logger.info("Successfully uploaded questions")
         return {"msg": "unrec_question.upload_success"}
 
-    @app.route("/validate", methods=["GET"])
+    @app.route("/validate", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"])
     def check_token():
-        """Endpoint for ORY Oathkeeper to validate a Bearer token"""
+        """Endpoint for ORY Oathkeeper to validate a Bearer token. Accepts every standard method type because
+        Oathkeeper also forwards the method type."""
         decoded = _verify_id_token()
         user_id = decoded["uid"]
         try:
@@ -543,6 +545,12 @@ def create_app(test_overrides=None, test_inst_path=None):
         This function is only callable in the context of a view function."""
         # return {"uid": app.config["DEV_UID"]}
         id_token = request.headers.get("Authorization")
+
+        # Cut off prefix if it is present
+        prefix = "Bearer "
+        if id_token.startswith(prefix):
+            id_token = id_token[len(prefix):]
+
         id_token_log = _get_private_data_string(id_token)
         app.logger.debug(f"id_token = {id_token_log}")
         if not id_token:
@@ -552,7 +560,8 @@ def create_app(test_overrides=None, test_inst_path=None):
                 return {"uid": app.config["DEV_UID"]}
         try:
             decoded = auth.verify_id_token(id_token)
-        except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError):
+        except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError) as e:
+            logger.debug(repr(e))
             decoded = None
             abort(HTTPStatus.UNAUTHORIZED)
         except auth.CertificateFetchError:
