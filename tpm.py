@@ -232,11 +232,11 @@ class QuizzrTPM:
             question_ids.remove(next_question_id)
         logging.error("Failed to find a viable unrecorded question. Aborting")
 
-    def pick_random_questions(self, question_ids, batch_size):
+    def pick_random_questions(self, collection_name, question_ids, required_fields, batch_size=1):
         qids_pool = question_ids.copy()
         random.shuffle(qids_pool)
         next_batch_size = batch_size
-        questions = []
+        sentences = []
         errors = []
         while qids_pool:
             if len(qids_pool) >= next_batch_size:
@@ -247,24 +247,30 @@ class QuizzrTPM:
                 qids_pool = []
             logging.debug(f"next_id_batch = {next_id_batch!r}")
             logging.debug(f"qids_pool = {qids_pool!r}")
-            questions_cursor = self.unrec_questions.find({"_id": {"$in": next_id_batch}})
+            questions_cursor = self.database.get_collection(collection_name).find({"qb_id": {"$in": next_id_batch}})
+            found = set()
             for doc in questions_cursor:
                 logging.debug(f"doc = {doc!r}")
-                if "transcript" in doc:
-                    questions.append(doc)
-                else:
-                    logging.warning("Question does not contain required field 'transcript'. Ignoring")
-                    errors.append((doc, "missing_transcript"))
-            next_batch_size -= len(questions)
+                valid_doc = True
+                for field in required_fields:
+                    if field not in doc:
+                        valid_doc = False
+                        logging.warning(f"Question does not contain required field '{field}'. Ignoring")
+                        errors.append((repr(doc["_id"]), f"missing_{field}"))
+                        break
+                if valid_doc:
+                    sentences.append(doc)
+                    found.add(doc["qb_id"])
+            next_batch_size -= len(found)
             if next_batch_size == 0:
                 logging.info("Found all questions requested. Returning results")
-                return questions, errors
-            logging.info(f"Found {len(questions)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
+                return sentences, errors
+            logging.info(f"Found {len(found)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
         if not qids_pool:
             logging.info("Could not find any more valid questions. Returning results")
-        if questions:
-            return questions, errors
-        logging.error("Failed to find any viable unrecorded questions. Aborting")
+        if sentences:
+            return sentences, errors
+        logging.error("Failed to find any viable questions. Aborting")
 
     # Utility methods for automatically updating the cached ID list. Deprecated.
     def insert_unrec_question(self, *args, **kwargs):

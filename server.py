@@ -98,7 +98,6 @@ def create_app(test_overrides=None, test_inst_path=None):
         if request.method == "GET":
             return get_unprocessed_audio()
         elif request.method == "POST":
-            _verify_id_token()
             recording = request.files.get("audio")
             question_id = request.form.get("qid")
             diarization_metadata = request.form.get("diarMetadata")
@@ -189,7 +188,6 @@ def create_app(test_overrides=None, test_inst_path=None):
     # Check if an answer is correct.
     @app.route("/answer", methods=["GET"])
     def check_answer():
-        _verify_id_token()
         qid = request.args.get("qid")
         user_answer = request.args.get("a")
 
@@ -208,79 +206,79 @@ def create_app(test_overrides=None, test_inst_path=None):
     # Retrieve a file from Firebase Storage.
     @app.route("/audio/<path:blob_path>", methods=["GET"])
     def retrieve_audio_file(blob_path):
-        _verify_id_token()
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
     # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
     @app.route("/question", methods=["GET"])
     def pick_game_question():
-        _verify_id_token()
-        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
+        cursor = qtpm.rec_questions.find({"qb_id": {"$exists": True}}, {"qb_id": 1})
+        question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
         if not question_ids:
             app.logger.error("No recorded questions found. Aborting")
             return "rec_empty_qids", HTTPStatus.NOT_FOUND
 
         # question_ids = qtpm.rec_question_ids.copy()
+        audios = []
         while True:
             next_question_id = random.choice(question_ids)
-            next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
+            cursor = qtpm.rec_questions.find({"qb_id": next_question_id})
             app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            app.logger.debug(f"next_question = {next_question!r}")
 
-            if next_question and next_question.get("recordings"):
-                audio = qtpm.find_best_audio_doc(
-                    next_question.get("recordings"),
-                    required_fields=["_id", "vtt", "gentleVtt"]
-                )
-                if audio:
-                    break
+            all_valid = True
+            for sentence in cursor:
+                if sentence and sentence.get("recordings"):
+                    app.logger.debug(f"sentence = {sentence!r}")
+                    audio = qtpm.find_best_audio_doc(
+                        sentence.get("recordings"),
+                        required_fields=["_id", "questionId", "sentenceId", "vtt", "gentleVtt"]
+                    )
+                    if not audio:
+                        all_valid = False
+                        break
+                    audios.append(audio)
+            if all_valid:
+                break
             app.logger.warning(
                 f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
             question_ids.remove(next_question_id)
             if not question_ids:
                 app.logger.error("Failed to find a viable recorded question. Aborting")
                 return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        result = audio.copy()
-        result["qid"] = str(next_question_id)
-        return result
+        return {"results": audios}
 
     # Find a random unrecorded question (or multiple) and return the ID and transcript.
     @app.route("/question/unrec", methods=["GET", "POST"])
     def unrec_question_resource():
         if request.method == "GET":
-            _verify_id_token()
             difficulty = request.args.get("difficultyType")
             batch_size = request.args.get("batchSize")
-            return pick_recording_question(difficulty, batch_size)
+            return pick_recording_question(int(difficulty) if difficulty else difficulty, int(batch_size or 1))
         elif request.method == "POST":
             arguments_batch = request.get_json()
             return upload_questions(arguments_batch)
 
-    def pick_recording_question(difficulty, batch_size):
+    def pick_recording_question(difficulty: int, batch_size: int):
         if difficulty is not None:
-            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], int(difficulty))
+            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], difficulty)
             difficulty_query = {"recDifficulty": difficulty_query_op}
         else:
             difficulty_query = {}
 
-        question_ids = QuizzrTPM.get_ids(qtpm.unrec_questions, difficulty_query)
+        query = {**difficulty_query, "qb_id": {"$exists": True}}
+
+        cursor = qtpm.unrec_questions.find(query, {"qb_id": 1})
+        question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
         if not question_ids:
             app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
-        errors = []
-        if batch_size is not None and int(batch_size) > 1:
-            next_questions, errors = qtpm.pick_random_questions(question_ids, int(batch_size))
-            if next_questions is None:
-                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-            results = []
-            for doc in next_questions:
-                results.append({"transcript": doc["transcript"], "id": str(doc["_id"])})
-        else:
-            next_question = qtpm.pick_random_question(question_ids)
-            if next_question is None:
-                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-            results = [{"transcript": next_question["transcript"], "id": str(next_question["_id"])}]
+        next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
+                                                            ["transcript", "sentenceId"], batch_size)
+        if next_questions is None:
+            return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+        results = []
+        for doc in next_questions:
+            results.append({"id": doc["qb_id"], "sentenceId": doc["sentenceId"], "transcript": doc["transcript"]})
         return {"results": results, "errors": errors}
 
     # Submit a recording for pre-screening and upload it to the database if it passes.
