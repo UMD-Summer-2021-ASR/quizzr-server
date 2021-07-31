@@ -2,9 +2,11 @@ import json
 import logging
 import os
 import random
+import sys
 from datetime import datetime
 from http import HTTPStatus
 
+import pymongo.errors
 from firebase_admin import auth
 from fuzzywuzzy import fuzz
 
@@ -16,15 +18,20 @@ from werkzeug.exceptions import abort
 import error_handling
 import rec_processing
 from tpm import QuizzrTPM
+from sv_errors import UserExistsError, ProfileNotFoundError, MalformedProfileError
 
 logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
 logger = logging.getLogger(__name__)
 
+DEV_ENV_NAME = "development"
+PROD_ENV_NAME = "production"
+TEST_ENV_NAME = "testing"
 
-# Flask app factory function
+
 def create_app(test_overrides=None, test_inst_path=None):
+    """App factory function for the data flow server"""
     instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
-                    or os.path.expanduser(os.path.join("~", "quizzr_server"))
+        or os.path.expanduser(os.path.join("~", "quizzr_server"))
     app = Flask(
         __name__,
         instance_relative_config=True,
@@ -39,7 +46,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         "DATABASE": "QuizzrDatabase",
         "BLOB_ROOT": "production",
         "BLOB_NAME_LENGTH": 32,
-        "Q_ENV": "production",
+        "Q_ENV": PROD_ENV_NAME,
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         "DIFFICULTY_LIMITS": [3, 6, None],
         "VERSION": "0.2.0",
@@ -50,7 +57,22 @@ def create_app(test_overrides=None, test_inst_path=None):
             "minAccuracy": 0.5,
             "queueLimit": 32
         },
-        "VERIFY_AUTH_TOKENS": True
+        "DEV_UID": "dev",
+        "LOG_PRIVATE_DATA": False,
+        "VISIBILITY_CONFIGS": {
+            "basic": {
+                "projection": {"pfp": 1, "username": 1, "usernameSpecs": 1},
+                "collection": "Users"
+            },
+            "public": {
+                "projection": {"pfp": 1, "username": 1, "usernameSpecs": 1},
+                "collection": "Users"
+            },
+            "private": {
+                "projection": {"_id": 0},
+                "collection": "Users"
+            }
+        }
     }
 
     config_dir = os.path.join(path, "config")
@@ -66,7 +88,8 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     for var in app_conf:
         if type(app_conf[var]) is not str and var in os.environ:
-            raise Exception(f"Cannot override non-string config field '{var}' through environment variable")
+            app.logger.critical(f"Cannot override non-string config field '{var}' through environment variable")
+            sys.exit(1)
     app_conf.update(os.environ)
     if test_overrides:
         app_conf.update(test_overrides)
@@ -92,23 +115,34 @@ def create_app(test_overrides=None, test_inst_path=None):
     )
     # TODO: multiprocessing
 
-    # Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB Atlas.
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
     def audio_resource():
+        """
+        GET: Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
+        Atlas.
+
+        POST: Submit a recording for pre-screening and upload it to the database if it passes.
+
+        PATCH: Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
+        Additionally, update the recording history of the associated questions and users.
+        """
         if request.method == "GET":
             return get_unprocessed_audio()
         elif request.method == "POST":
-            _verify_id_token()
+            decoded = _verify_id_token()
             recording = request.files.get("audio")
             question_id = request.form.get("qid")
             diarization_metadata = request.form.get("diarMetadata")
             rec_type = request.form.get("recType")
-            return pre_screen(recording, question_id, diarization_metadata, rec_type)
+            user_id = decoded['uid']
+            return pre_screen(recording, question_id, user_id, diarization_metadata, rec_type)
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
 
     def get_unprocessed_audio():
+        """Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
+        Atlas."""
         max_docs = app.config["UNPROC_FIND_LIMIT"]
         errs = []
         results_projection = ["_id", "diarMetadata"]  # In addition to the transcript
@@ -163,128 +197,8 @@ def create_app(test_overrides=None, test_inst_path=None):
             response["errors"] = [{"type": err[0], "reason": err[1]} for err in errs]
         return response
 
-    # Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
-    # Additionally, update the recording history of the associated questions and users.
-    def handle_processing_results(arguments_batch):
-        arguments_list = arguments_batch.get("arguments")
-        if arguments_list is None:
-            return "undefined_arguments", HTTPStatus.BAD_REQUEST
-        app.logger.info(f"Updating data related to {len(arguments_list)} audio documents...")
-        errors = []
-        success_count = 0
-        for arguments in arguments_list:
-            errs = qtpm.update_processed_audio(arguments)
-            if not errs:
-                success_count += 1
-            else:
-                errors += ({"type": err[0], "reason": err[1]} for err in errs)
-
-        results = {"successes": success_count, "total": len(arguments_list)}
-        if errors:
-            results["errors"] = errors
-        app.logger.info(f"Successfully updated data related to {success_count} of {len(arguments_list)} audio documents")
-        app.logger.info(f"Logged {len(errors)} warning messages")
-        return results
-
-    # Check if an answer is correct.
-    @app.route("/answer", methods=["GET"])
-    def check_answer():
-        _verify_id_token()
-        qid = request.args.get("qid")
-        user_answer = request.args.get("a")
-
-        if not qid:
-            return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
-        if not user_answer:
-            return "arg_a_undefined", HTTPStatus.BAD_REQUEST
-
-        question = qtpm.rec_questions.find_one({"_id": bson.ObjectId(qid)})
-        correct_answer = question.get("answer")
-        if not correct_answer:
-            return "answer_not_found", HTTPStatus.NOT_FOUND
-
-        return {"correct": fuzz.token_set_ratio(user_answer, correct_answer) >= app.config["MIN_ANSWER_SIMILARITY"]}
-
-    # Retrieve a file from Firebase Storage.
-    @app.route("/audio/<path:blob_path>", methods=["GET"])
-    def retrieve_audio_file(blob_path):
-        _verify_id_token()
-        return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
-
-    # Find a random recorded question and return the VTT and ID of the recording with the best evaluation.
-    @app.route("/question", methods=["GET"])
-    def pick_game_question():
-        _verify_id_token()
-        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
-        if not question_ids:
-            app.logger.error("No recorded questions found. Aborting")
-            return "rec_empty_qids", HTTPStatus.NOT_FOUND
-
-        # question_ids = qtpm.rec_question_ids.copy()
-        while True:
-            next_question_id = random.choice(question_ids)
-            next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
-            app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            app.logger.debug(f"next_question = {next_question!r}")
-
-            if next_question and next_question.get("recordings"):
-                audio = qtpm.find_best_audio_doc(
-                    next_question.get("recordings"),
-                    required_fields=["_id", "vtt", "gentleVtt"]
-                )
-                if audio:
-                    break
-            app.logger.warning(
-                f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
-            question_ids.remove(next_question_id)
-            if not question_ids:
-                app.logger.error("Failed to find a viable recorded question. Aborting")
-                return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        result = audio.copy()
-        result["qid"] = str(next_question_id)
-        return result
-
-    # Find a random unrecorded question (or multiple) and return the ID and transcript.
-    @app.route("/question/unrec", methods=["GET", "POST"])
-    def unrec_question_resource():
-        if request.method == "GET":
-            _verify_id_token()
-            difficulty = request.args.get("difficultyType")
-            batch_size = request.args.get("batchSize")
-            return pick_recording_question(difficulty, batch_size)
-        elif request.method == "POST":
-            arguments_batch = request.get_json()
-            return upload_questions(arguments_batch)
-
-    def pick_recording_question(difficulty, batch_size):
-        if difficulty is not None:
-            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], int(difficulty))
-            difficulty_query = {"recDifficulty": difficulty_query_op}
-        else:
-            difficulty_query = {}
-
-        question_ids = QuizzrTPM.get_ids(qtpm.unrec_questions, difficulty_query)
-        if not question_ids:
-            app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
-            return "unrec_empty_qids", HTTPStatus.NOT_FOUND
-
-        errors = []
-        if batch_size is not None and int(batch_size) > 1:
-            next_questions, errors = qtpm.pick_random_questions(question_ids, int(batch_size))
-            if next_questions is None:
-                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-            results = []
-            for doc in next_questions:
-                results.append({"transcript": doc["transcript"], "id": str(doc["_id"])})
-        else:
-            next_question = qtpm.pick_random_question(question_ids)
-            if next_question is None:
-                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-            results = [{"transcript": next_question["transcript"], "id": str(next_question["_id"])}]
-        return {"results": results, "errors": errors}
-
-    # Submit a recording for pre-screening and upload it to the database if it passes.
-    def pre_screen(recording, question_id, diarization_metadata, rec_type):
+    def pre_screen(recording, question_id, user_id, diarization_metadata, rec_type):
+        """Submit a recording for pre-screening and upload it to the database if it passes."""
         valid_rec_types = ["normal", "buzz"]
 
         app.logger.debug(f"question_id = {question_id!r}")
@@ -313,20 +227,20 @@ def create_app(test_overrides=None, test_inst_path=None):
                 app.logger.error("Form argument 'qid' is not a valid ObjectId. Aborting")
                 return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
 
-        user_ids = QuizzrTPM.get_ids(qtpm.users)
-        if not user_ids:
-            app.logger.error("No user IDs found. Aborting")
-            return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
+        # user_ids = QuizzrTPM.get_ids(qtpm.users)
+        # if not user_ids:
+        #     app.logger.error("No user IDs found. Aborting")
+        #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
         # user_ids = qtpm.user_ids.copy()
-        while True:
-            user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
-            if success:
-                break
-            app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
-            user_ids.remove(user_id)
-            if not user_ids:
-                app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
-                break
+        # while True:
+        #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
+        #     if success:
+        #         break
+        #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
+        #     user_ids.remove(user_id)
+        #     if not user_ids:
+        #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
+        #         break
         app.logger.debug(f"user_id = {user_id!r}")
 
         metadata = {
@@ -403,8 +317,179 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
 
-    # Upload a batch of unrecorded questions.
+    def handle_processing_results(arguments_batch):
+        """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
+        Additionally, update the recording history of the associated questions and users."""
+        arguments_list = arguments_batch.get("arguments")
+        if arguments_list is None:
+            return "undefined_arguments", HTTPStatus.BAD_REQUEST
+        app.logger.info(f"Updating data related to {len(arguments_list)} audio documents...")
+        errors = []
+        success_count = 0
+        for arguments in arguments_list:
+            errs = qtpm.update_processed_audio(arguments)
+            if not errs:
+                success_count += 1
+            else:
+                errors += ({"type": err[0], "reason": err[1]} for err in errs)
+
+        results = {"successes": success_count, "total": len(arguments_list)}
+        if errors:
+            results["errors"] = errors
+        app.logger.info(f"Successfully updated data related to {success_count} of {len(arguments_list)} audio documents")
+        app.logger.info(f"Logged {len(errors)} warning messages")
+        return results
+
+    @app.route("/answer", methods=["GET"])
+    def check_answer():
+        """Check if an answer is correct."""
+        qid = request.args.get("qid")
+        user_answer = request.args.get("a")
+
+        if not qid:
+            return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+        if not user_answer:
+            return "arg_a_undefined", HTTPStatus.BAD_REQUEST
+
+        question = qtpm.rec_questions.find_one({"_id": bson.ObjectId(qid)})
+        correct_answer = question.get("answer")
+        if not correct_answer:
+            return "answer_not_found", HTTPStatus.NOT_FOUND
+
+        return {"correct": fuzz.token_set_ratio(user_answer, correct_answer) >= app.config["MIN_ANSWER_SIMILARITY"]}
+
+    @app.route("/audio/<path:blob_path>", methods=["GET"])
+    def retrieve_audio_file(blob_path):
+        """Retrieve a file from Firebase Storage."""
+        return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
+
+    @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
+    def own_profile():
+        """A resource to automatically point to the user's own profile."""
+        decoded = _verify_id_token()
+        # decoded = {"uid": "dev"}
+        user_id = decoded["uid"]
+        if request.method == "GET":
+            return qtpm.get_profile(user_id, "private")
+        elif request.method == "POST":
+            args = request.get_json()
+            try:
+                result = qtpm.create_profile(user_id, args["pfp"], args["username"])
+            except pymongo.errors.DuplicateKeyError:
+                return "already_registered", HTTPStatus.BAD_REQUEST
+            except UserExistsError as e:
+                return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
+            if result:
+                return "user_created", HTTPStatus.CREATED
+            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+        elif request.method == "PATCH":
+            # TODO: Deny permission for modifying unwanted fields.
+            update_args = request.get_json()
+            result = qtpm.modify_profile(user_id, update_args)
+            if result:
+                return "user_modified", HTTPStatus.OK
+            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+        elif request.method == "DELETE":
+            qtpm.delete_profile(user_id)
+            result = qtpm.delete_profile(user_id)
+            if result:
+                return "user_deleted", HTTPStatus.OK
+            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/profile/<username>", methods=["GET", "PATCH", "DELETE"])
+    def other_profile(username):
+        other_user_profile = qtpm.users.find_one({"username": username}, {"_id": 1})
+        if not other_user_profile:
+            abort(HTTPStatus.NOT_FOUND)
+        other_user_id = other_user_profile["_id"]
+        if request.method == "GET":
+            visibility = "basic" if _query_flag("basic") else "public"
+            return qtpm.get_profile(other_user_id, visibility)
+        elif request.method == "PATCH":
+            update_args = request.get_json()
+            result = qtpm.modify_profile(other_user_id, update_args)
+            if result:
+                return "other_user_modified", HTTPStatus.OK
+            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+        elif request.method == "DELETE":
+            result = qtpm.delete_profile(other_user_id)
+            if result:
+                return "other_user_deleted", HTTPStatus.OK
+            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+
+    @app.route("/question", methods=["GET"])
+    def pick_game_question():
+        """Find a random recorded question and return the VTT and ID of the recording with the best evaluation."""
+        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
+        if not question_ids:
+            app.logger.error("No recorded questions found. Aborting")
+            return "rec_empty_qids", HTTPStatus.NOT_FOUND
+
+        # question_ids = qtpm.rec_question_ids.copy()
+        while True:
+            next_question_id = random.choice(question_ids)
+            next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
+            app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
+            app.logger.debug(f"next_question = {next_question!r}")
+
+            if next_question and next_question.get("recordings"):
+                audio = qtpm.find_best_audio_doc(
+                    next_question.get("recordings"),
+                    required_fields=["_id", "vtt", "gentleVtt"]
+                )
+                if audio:
+                    break
+            app.logger.warning(
+                f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
+            question_ids.remove(next_question_id)
+            if not question_ids:
+                app.logger.error("Failed to find a viable recorded question. Aborting")
+                return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
+        result = audio.copy()
+        result["qid"] = str(next_question_id)
+        return result
+
+    @app.route("/question/unrec", methods=["GET", "POST"])
+    def unrec_question_resource():
+        if request.method == "GET":
+            difficulty = request.args.get("difficultyType")
+            batch_size = request.args.get("batchSize")
+            return pick_recording_question(difficulty, batch_size)
+        elif request.method == "POST":
+            arguments_batch = request.get_json()
+            return upload_questions(arguments_batch)
+
+    def pick_recording_question(difficulty, batch_size):
+        """Find a random unrecorded question (or multiple) and return the ID and transcript."""
+        if difficulty is not None:
+            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"],
+                                                                    int(difficulty))
+            difficulty_query = {"recDifficulty": difficulty_query_op}
+        else:
+            difficulty_query = {}
+
+        question_ids = QuizzrTPM.get_ids(qtpm.unrec_questions, difficulty_query)
+        if not question_ids:
+            app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
+            return "unrec_empty_qids", HTTPStatus.NOT_FOUND
+
+        errors = []
+        if batch_size is not None and int(batch_size) > 1:
+            next_questions, errors = qtpm.pick_random_questions(question_ids, int(batch_size))
+            if next_questions is None:
+                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+            results = []
+            for doc in next_questions:
+                results.append({"transcript": doc["transcript"], "id": str(doc["_id"])})
+        else:
+            next_question = qtpm.pick_random_question(question_ids)
+            if next_question is None:
+                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+            results = [{"transcript": next_question["transcript"], "id": str(next_question["_id"])}]
+        return {"results": results, "errors": errors}
+
     def upload_questions(arguments_batch):
+        """Upload a batch of unrecorded questions."""
         arguments_list = arguments_batch["arguments"]
         app.logger.debug(f"arguments_list = {arguments_list!r}")
 
@@ -413,19 +498,37 @@ def create_app(test_overrides=None, test_inst_path=None):
         app.logger.info("Successfully uploaded questions")
         return {"msg": "unrec_question.upload_success"}
 
+    @app.route("/validate", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"])
+    def check_token():
+        """Endpoint for ORY Oathkeeper to validate a Bearer token. Accepts every standard method type because
+        Oathkeeper also forwards the method type."""
+        decoded = _verify_id_token()
+        user_id = decoded["uid"]
+        try:
+            subject = _get_user_role(user_id)
+        except ProfileNotFoundError as e:
+            subject = "anonymous"
+            app.logger.info(f"Profile not found: {e}. Subject registered as 'anonymous'")
+        except MalformedProfileError as e:
+            msg = str(e)
+            app.logger.error(f"{msg}. Aborting")
+            return f"{msg}\n", HTTPStatus.UNAUTHORIZED
+
+        return {"subject": subject, "extra": {}}, HTTPStatus.OK
+
     # DO NOT INCLUDE THE ROUTES BELOW IN DEPLOYMENT
     @app.route("/uploadtest/")
     def recording_listener_test():
-        if app.config["Q_ENV"] not in ["development", "testing"]:
+        if app.config["Q_ENV"] not in [DEV_ENV_NAME, TEST_ENV_NAME]:
             abort(HTTPStatus.NOT_FOUND)
         return render_template("uploadtest.html")
 
-    # Return the next submission name.
     def _get_next_submission_name():
+        """Return a filename safe date-timestamp of the current system time"""
         return str(datetime.now().strftime("%Y.%m.%d %H.%M.%S.%f"))
 
-    # Write a WAV file and its JSON metadata to disk.
     def _save_recording(directory, recording, metadata):
+        """Write a WAV file and its JSON metadata to disk."""
         app.logger.info("Saving recording...")
         submission_name = _get_next_submission_name()
         app.logger.debug(f"submission_name = {submission_name!r}")
@@ -441,14 +544,28 @@ def create_app(test_overrides=None, test_inst_path=None):
         return submission_name
 
     def _verify_id_token():
-        if not app.config["VERIFY_AUTH_TOKENS"]:
-            return
-        id_token = request.headers.get("Auth-Token")
+        """Try to decode the token if provided. If in a production environment, forbid access when the decode fails.
+        This function is only callable in the context of a view function."""
+        # return {"uid": app.config["DEV_UID"]}
+        id_token = request.headers.get("Authorization")
+
+        id_token_log = _get_private_data_string(id_token)
+        app.logger.debug(f"id_token = {id_token_log}")
         if not id_token:
-            abort(HTTPStatus.UNAUTHORIZED)
+            if app.config["Q_ENV"] == PROD_ENV_NAME:
+                abort(HTTPStatus.UNAUTHORIZED)
+            else:
+                return {"uid": app.config["DEV_UID"]}
+
+        # Cut off prefix if it is present
+        prefix = "Bearer "
+        if id_token.startswith(prefix):
+            id_token = id_token[len(prefix):]
+
         try:
             decoded = auth.verify_id_token(id_token)
-        except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError):
+        except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError) as e:
+            logger.debug(repr(e))
             decoded = None
             abort(HTTPStatus.UNAUTHORIZED)
         except auth.CertificateFetchError:
@@ -456,5 +573,34 @@ def create_app(test_overrides=None, test_inst_path=None):
             abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
         return decoded
+
+    def _get_private_data_string(original):
+        """Utility function for redacting private data if 'LOG_PRIVATE_DATA' is not True"""
+        if app.config["LOG_PRIVATE_DATA"]:
+            return original
+        return "[REDACTED]"
+
+    def _query_flag(flag: str) -> bool:
+        """
+        Detect if a query 'flag' is present (e.g., "example.com/foo?bar" vs "example.com/foo"). Only callable in the
+        context of a Flask view function.
+        """
+        return request.args.get(flag) is not None
+
+    def _get_user_role(user_id):
+        """
+        Get the permission level of the user associated with the given ID
+
+        :param user_id: The internal ID of a user, defined by the _id field of a profile document
+        :return: The role of the user
+        :raise ProfileNotFoundError: When the profile associated with the given ID does not exist
+        :raise MalformedProfileError: When the profile associated with the given ID is missing the permission level
+        """
+        profile = qtpm.users.find_one({"_id": user_id}, {"permLevel": 1})
+        if not profile:
+            raise ProfileNotFoundError(f"'{user_id}'")
+        if "permLevel" not in profile:
+            raise MalformedProfileError(f"Field 'permLevel' not found in profile for user '{user_id}'")
+        return profile["permLevel"]
 
     return app

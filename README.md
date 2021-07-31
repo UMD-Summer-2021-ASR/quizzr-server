@@ -17,8 +17,69 @@ To update the repository on your machine, either use `git pull` (requires you to
 ### Uninstalling
 To uninstall this repository, simply delete its directory and the contents defining its associated virtual environment, along with the instance path.
 
+## Configuring the Server
+Creating a JSON file named `sv_config.json` in the `config` subdirectory of the instance path allows for specifying a set of overrides to merge on top of the default configuration.
+ All configuration fields must use purely capital letters to be recognized by the server. The following is a list of configuration fields and their descriptions:
+* `UNPROC_FIND_LIMIT` The maximum number of unprocessed audio documents to find in a single batch.
+* `DATABASE` The name of the database to use in MongoDB.
+* `BLOB_ROOT` The name of the root folder to use in Firebase Storage.
+* `BLOB_NAME_LENGTH` The length of the string to generate when naming uploaded audio files.
+* `Q_ENV` The type of environment to use. A value of `development` or `testing` makes the server identify unauthenticated users as `dev` and allows access to the `/uploadtest` endpoint.
+* `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
+* `DIFFICULTY_LIMITS` The upper bound of each difficulty, or `null` to have no upper bound.
+* `VERSION` The version of the software. Used in audio document definitions for cases where the schema changes.
+* `MIN_ANSWER_SIMILARITY` The program marks a given answer at the `/answer` `GET` endpoint as correct if the similarity between the answer and the correct answer exceeds this value.
+* `PROC_CONFIG` Configuration for the recording processor. Includes:
+  * `checkUnk` Check for unknown words along with unaligned words when calculating accuracy.
+  * `unkToken` The value of the aligned word to look for when detecting out-of-vocabulary words.
+  * `minAccuracy` The minimum acceptable accuracy of a submission.
+  * `queueLimit` The maximum number of submissions to pre-screen at once.
+* `DEV_UID` The default user ID of an unauthenticated user in a `development` environment.
+* `LOG_PRIVATE_DATA` Redact sensitive information, such as Firebase ID tokens, in log messages.
+* `VISIBILITY_CONFIGS` A set of configurations that determine which collection to retrieve a profile from and what projection to apply. Projections are objects with the key being the field name and the value being 1 or 0, representing whether to include or exclude the field.
+
+It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
+
+### Configuration Defaults
+The following JSON data shows the default values of each configuration field. You may also view the default configuration in `server.py`.
+```json
+{
+  "UNPROC_FIND_LIMIT": 32,
+  "DATABASE": "QuizzrDatabase",
+  "BLOB_ROOT": "production",
+  "BLOB_NAME_LENGTH": 32,
+  "Q_ENV": "production",
+  "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
+  "DIFFICULTY_LIMITS": [3, 6, null],
+  "VERSION": "0.2.0",
+  "MIN_ANSWER_SIMILARITY": 50,
+  "PROC_CONFIG": {
+    "checkUnk": true,
+    "unkToken": "<unk>",
+    "minAccuracy": 0.5,
+    "queueLimit": 32
+  },
+  "DEV_UID": "dev",
+  "LOG_PRIVATE_DATA": false,
+  "VISIBILITY_CONFIGS": {
+    "basic": {
+      "projection": {"pfp": 1, "username": 1, "usernameSpecs": 1},
+      "collection": "Users"
+    },
+    "public": {
+      "projection": {"pfp": 1, "username": 1, "usernameSpecs": 1},
+      "collection": "Users"
+    },
+    "private": {
+      "projection": {"_id": 0},
+      "collection": "Users"
+    }
+  }
+}
+```
+
 ## Running the Server
-Prior to running the server, get the connection string for the MongoDB Client from the Quizzr Atlas (accessed through the Quizzr team account). \
+Prior to running the server, get the connection string for the MongoDB Client from the Quizzr Atlas (accessed through the Quizzr Google account). \
 To start the server, enter the following commands into the terminal, replacing `your-connection-string` with the connection string you obtained earlier:
 ```bash
 $ export CONNECTION_STRING=your-connection-string
@@ -29,26 +90,6 @@ You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 
 To run the server in debug mode, set `FLASK_ENV` to `development` in the terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.
-### Configuring the Server
-Creating a JSON file named `sv_config.json` in the `config` subdirectory of the instance path allows for specifying a set of overrides to merge on top of the default configuration.
- All configuration fields must use purely capital letters to be recognized by the server. The following is a list of configuration fields and their descriptions:
-* `UNPROC_FIND_LIMIT` The maximum number of unprocessed audio documents to find in a single batch.
-* `DATABASE` The name of the database to use in MongoDB.
-* `BLOB_ROOT` The name of the root folder to use in Firebase Storage.
-* `BLOB_NAME_LENGTH` The length of the string to generate when naming uploaded audio files.
-* `Q_ENV` The type of environment to use. It currently does not have much use outside of controlling access to certain pages.
-* `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
-* `DIFFICULTY_LIMITS` The upper bound of each difficulty, or `null` to have no upper bound.
-* `VERSION` The version of the software. Used in audio document definitions for cases where the schema changes.
-* `MIN_ANSWER_SIMILARITY` The program marks a given answer at the `/answer` `GET` endpoint as correct if the similarity between the answer and the correct answer exceeds this value.
-* `PROC_CONFIG` Configuration for the recording processor. Includes:
-  * `checkUnk` Check for unknown words along with unaligned words when calculating accuracy.
-  * `unkToken` The value of the aligned word to look for when detecting out-of-vocabulary words.
-  * `minAccuracy` The minimum acceptable accuracy of a submission.
-  * `queueLimit` The maximum number of submissions to pre-screen at once.
-* `VERIFY_AUTH_TOKENS` The program blocks access to certain resources for users not properly authenticated in Firebase if this field is `true`.
-
-It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
 ### Testing
 There is a separate repository for running automated tests on the server. See the [quizzr-server-test](https://github.com/UMD-Summer-2021-ASR/quizzr-server-test) repository for more information.

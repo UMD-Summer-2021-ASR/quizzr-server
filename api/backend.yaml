@@ -15,7 +15,9 @@ paths:
   /answer:
     get:
       summary: Check an Answer
-      tags: []
+      tags:
+        - frontend
+        - qb-pipeline
       responses:
         '200':
           description: OK
@@ -39,12 +41,15 @@ paths:
           in: query
           name: qid
           description: The ID of the question selected
-        - $ref: '#/components/parameters/Auth-Token'
       description: Check if the user's answer approximately matches the stored answer of the associated question.
+      security:
+        - Firebase-Auth: []
   /audio:
     get:
       summary: Get Unprocessed Audio Batch
-      tags: []
+      tags:
+        - internal
+        - rec-pipeline
       responses:
         '200':
           description: Document Batch Found
@@ -95,13 +100,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorMsg'
+                $ref: '#/components/schemas/Error-Msg'
       operationId: get_unprocessed_audio
       description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
       parameters: []
     patch:
       summary: Add Processed Audio Data
-      tags: []
+      tags:
+        - internal
+        - rec-pipeline
       responses:
         '201':
           description: Created
@@ -125,7 +132,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorMsg'
+                $ref: '#/components/schemas/Error-Msg'
       operationId: handle_processing_results
       requestBody:
         content:
@@ -201,7 +208,9 @@ paths:
       parameters: []
     post:
       summary: Submit Recording
-      tags: []
+      tags:
+        - frontend
+        - rec-pipeline
       responses:
         '202':
           description: Upload Successful
@@ -221,7 +230,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorMsg'
+                $ref: '#/components/schemas/Error-Msg'
         '500':
           description: Internal Server Error
           content:
@@ -241,8 +250,7 @@ paths:
                 required:
                   - err
       operationId: pre_screen
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
       requestBody:
         content:
           multipart/form-data:
@@ -285,12 +293,16 @@ paths:
                   recType: buzz
         description: The file to upload along with some transaction information.
       description: Pre-screen the given audio file for how accurately it matches to the given question's transcript and upload it to the database if it is accurate enough.
+      security:
+        - Firebase-Auth: []
   '/audio/{blob_path}':
     parameters:
       - $ref: '#/components/parameters/BlobPath'
     get:
       summary: Get Recording
-      tags: []
+      tags:
+        - frontend
+        - qb-pipeline
       responses:
         '200':
           description: Recording Found
@@ -305,12 +317,249 @@ paths:
           description: Not Found
       operationId: retrieve_audio_file
       description: Retrieve an audio file from Firebase storage.
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
+  /profile:
+    get:
+      summary: Get Private Profile
+      tags:
+        - frontend
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              examples:
+                new_user:
+                  value:
+                    _id: kaJ73KMV78tIj3a92xmn83ikjla1
+                    pfp:
+                      - 0
+                    username: John Doe
+                    usernameSpecs: ''
+                    rating: 0
+                    totalQuestionsPlayed: 0
+                    totalGames: 0
+                    coins: 0
+                    coinsCumulative: 0
+                    activityOverview: []
+                    recordedAudios: []
+                    permLevel: normal
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not Found
+        '500':
+          description: Internal Server Error
+      operationId: get_profile
+      parameters: []
+      description: Retrieve all profile information associated with the user specified in the Auth-Token header. This is intended to be called by solely the front-end.
+      security:
+        - Firebase-Auth: []
+    post:
+      summary: Create Profile
+      operationId: create_profile
+      responses:
+        '201':
+          description: Created
+        '400':
+          description: Bad Request
+        '409':
+          description: Username Taken
+      description: Create a user profile stub as a client
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pfp:
+                  $ref: '#/components/schemas/PFP-Specs'
+                username:
+                  type: string
+              required:
+                - pfp
+                - username
+            examples:
+              user-stub:
+                value:
+                  pfp:
+                    - 0
+                  username: John Doe
+        description: The profile arguments. Extremely limited because this is executed anonymously.
+      tags:
+        - frontend
+      parameters: []
+      security:
+        - Firebase-Auth: []
+    patch:
+      summary: Update Profile
+      operationId: modify_profile
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '404':
+          description: Not Found
+        '500':
+          description: Internal Server Error
+      description: Update the user's profile as the user
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pfp:
+                  $ref: '#/components/schemas/PFP-Specs'
+                username:
+                  type: string
+                usernameSpecs:
+                  $ref: '#/components/schemas/Username-Specs'
+        description: The fields to update. Can include any of the properties listed below.
+      tags:
+        - frontend
+      security:
+        - Firebase-Auth: []
+    delete:
+      summary: Remove Profile
+      operationId: delete_profile
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '404':
+          description: Not Found
+        '500':
+          description: Internal Server Error
+      description: 'Delete the user''s profile as the user, along with all associated data.'
+      tags:
+        - frontend
+      parameters: []
+      security:
+        - Firebase-Auth: []
+  '/profile/{username}':
+    parameters:
+      - schema:
+          type: string
+        name: username
+        in: path
+        required: true
+    get:
+      summary: Get Public Profile
+      tags:
+        - frontend
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Public-Profile'
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not Found
+        '500':
+          description: Internal Server Error
+      operationId: get_other_profile
+      description: Retrieve the public profile of another user
+      parameters: []
+      security:
+        - Firebase-Auth: []
+    patch:
+      summary: Change Other Profile
+      tags:
+        - frontend
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not Found
+        '500':
+          description: Internal Server Error
+      operationId: modify_other_profile
+      description: Modify the profile of another user. Can modify any field except `permLevel`. Requires elevated permissions.
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pfp:
+                  $ref: '#/components/schemas/PFP-Specs'
+                username:
+                  type: string
+                usernameSpecs:
+                  $ref: '#/components/schemas/Username-Specs'
+                rating:
+                  type: integer
+                totalQuestionsPlayed:
+                  type: integer
+                totalGames:
+                  type: integer
+                coins:
+                  type: integer
+                coinsCumulative:
+                  type: integer
+                activityOverview:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/User-Action'
+                recordedAudios:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Recording'
+        description: The fields to update. Can include any of the properties listed below.
+      security:
+        - Firebase-Auth: []
+    delete:
+      summary: Remove Other Profile
+      tags:
+        - frontend
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not Found
+        '500':
+          description: Internal Server Error
+      operationId: delete_other_profile
+      description: Deletes another user. Requires elevated permissions.
+      parameters: []
+      security:
+        - Firebase-Auth: []
   /question:
     get:
       summary: Get Recorded Question
-      tags: []
+      tags:
+        - qb-pipeline
+        - frontend
       responses:
         '200':
           description: Question Found
@@ -369,12 +618,15 @@ paths:
                   - err
       operationId: pick_game_question
       description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
-      parameters:
-        - $ref: '#/components/parameters/Auth-Token'
+      parameters: []
+      security:
+        - Firebase-Auth: []
   /question/unrec:
     get:
       summary: Get Question and Transcript
-      tags: []
+      tags:
+        - frontend
+        - rec-pipeline
       responses:
         '200':
           description: Question Found
@@ -422,10 +674,12 @@ paths:
           in: query
           name: difficultyType
           description: A difficulty type in enumerated form. Higher numbers are more difficult.
-        - $ref: '#/components/parameters/Auth-Token'
+      security:
+        - Firebase-Auth: []
     post:
       summary: Upload Question Batch
-      tags: []
+      tags:
+        - internal
       responses:
         '201':
           description: Created
@@ -434,7 +688,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorMsg'
+                $ref: '#/components/schemas/Error-Msg'
         '500':
           description: Internal Server Error
       operationId: upload_questions
@@ -476,6 +730,97 @@ paths:
       parameters: []
 components:
   schemas:
+    Audio-Id:
+      type: string
+      title: Audio-Id
+      description: The ID of an audio document
+      examples:
+        - aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+      pattern: '^[A-Za-z0-9 -_]+'
+      example: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+    Errors:
+      title: Errors
+      type: array
+      description: A list of error messages to send to the end user (of the API)
+      examples:
+        - - type: bad_request
+            reason: arg_foo_undefined
+      items:
+        type: object
+        properties:
+          type:
+            type: string
+            enum:
+              - bad_request
+              - internal_error
+          reason:
+            $ref: '#/components/schemas/Error-Msg'
+        required:
+          - type
+          - reason
+    Error-Msg:
+      title: Error
+      type: string
+      description: A machine-readable error message
+      examples:
+        - unrec_invalid_qids
+    Permission-Level:
+      type: string
+      title: Permission-Level
+      enum:
+        - normal
+        - admin
+      description: The permission level of a user
+      examples:
+        - normal
+    PFP-Specs:
+      title: PFP-Specs
+      type: array
+      description: Profile picture specifications
+      items:
+        type: integer
+      examples:
+        - - 0
+    Public-Profile:
+      title: Public-Profile
+      type: object
+      description: The public profile of a user
+      properties:
+        username:
+          type: string
+        usernameSpecs:
+          $ref: '#/components/schemas/Username-Specs'
+        pfp:
+          $ref: '#/components/schemas/PFP-Specs'
+        rating:
+          type: integer
+      examples:
+        - username: John Doe
+          usernameSpecs: ''
+          pfp:
+            - 0
+          rating: 0
+    Recording:
+      title: Recording
+      type: object
+      description: A recording submission as represented when embedded in a field.
+      properties:
+        id:
+          $ref: '#/components/schemas/Audio-Id'
+        recType:
+          $ref: '#/components/schemas/Rec-Type'
+      examples:
+        - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+          recType: normal
+    Rec-Type:
+      type: string
+      title: Rec-Type
+      description: Recording type
+      enum:
+        - normal
+        - buzz
+      examples:
+        - normal
     Str-ObjectId:
       type: string
       title: Str-ObjectId
@@ -485,6 +830,91 @@ components:
       description: String representation of an ObjectId
       examples:
         - 9174ea6cb092348d950a2f65
+    User:
+      title: User
+      type: object
+      description: 'The full profile of a user, including "private" information. This is a MongoDB document in the Users collection.'
+      properties:
+        _id:
+          $ref: '#/components/schemas/User-Id'
+        pfp:
+          $ref: '#/components/schemas/PFP-Specs'
+        username:
+          type: string
+        usernameSpecs:
+          $ref: '#/components/schemas/Username-Specs'
+        rating:
+          type: integer
+        totalQuestionsPlayed:
+          type: integer
+        totalGames:
+          type: integer
+        coins:
+          type: integer
+        coinsCumulative:
+          type: integer
+        activityOverview:
+          type: array
+          items:
+            $ref: '#/components/schemas/User-Action'
+        recordedAudios:
+          type: array
+          items:
+            $ref: '#/components/schemas/Recording'
+        permLevel:
+          $ref: '#/components/schemas/Permission-Level'
+      required:
+        - _id
+        - pfp
+        - username
+        - usernameSpecs
+        - rating
+        - totalQuestionsPlayed
+        - totalGames
+        - coins
+        - coinsCumulative
+        - activityOverview
+        - recordedAudios
+        - permLevel
+      examples:
+        - _id: kaJ73KMV78tIj3a92xmn83ikjla1
+          pfp:
+            - 0
+          username: John Doe
+          usernameSpecs: ''
+          rating: 0
+          totalQuestionsPlayed: 0
+          totalGames: 0
+          coins: 0
+          coinsCumulative: 0
+          activityOverview:
+            - id: string
+          recordedAudios:
+            - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+              recType: normal
+          permLevel: normal
+    Username-Specs:
+      title: Username-Specs
+      type: string
+      description: Username specifications
+      examples: []
+    User-Action:
+      title: User-Action
+      type: object
+      properties:
+        id:
+          type: string
+      description: Not defined yet
+      examples: []
+    User-Id:
+      type: string
+      title: User-Id
+      description: Firebase User ID
+      pattern: '^[A-Za-z0-9]{28}'
+      examples:
+        - kaJ73KMV78tIj3a92xmn83ikjla1
+      minLength: 28
+      maxLength: 28
     VTT:
       title: VTT
       type: string
@@ -504,39 +934,6 @@ components:
 
           00:01:01.123456 --> 00:01:02.123456
           <v Speaker 2>WORD4
-    ErrorMsg:
-      title: Error
-      type: string
-      description: A machine-readable error message
-      examples:
-        - unrec_invalid_qids
-    Errors:
-      title: Errors
-      type: array
-      description: A list of error messages to send to the end user (of the API)
-      examples:
-        - - type: bad_request
-            reason: arg_foo_undefined
-      items:
-        type: object
-        properties:
-          type:
-            type: string
-            enum:
-              - bad_request
-              - internal_error
-          reason:
-            $ref: '#/components/schemas/ErrorMsg'
-        required:
-          - type
-          - reason
-    Audio-Id:
-      type: string
-      title: Audio-Id
-      description: The ID of an audio document
-      examples: []
-      pattern: '^[A-Za-z0-9 -_]+'
-      example: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
   parameters:
     BlobPath:
       name: blob_path
@@ -547,10 +944,14 @@ components:
         format: uri
       description: The path to a Firebase Cloud Storage object in the format `<recType>/<_id>`
       allowReserved: true
-    Auth-Token:
-      name: Auth-Token
-      in: header
-      schema:
-        type: string
-      description: A Firebase authentication token. Only required if `VERIFY_AUTH_TOKENS` is `true`.
   responses: {}
+  securitySchemes:
+    Firebase-Auth:
+      type: http
+      scheme: bearer
+      description: A Bearer token sent from Firebase
+tags:
+  - name: frontend
+  - name: internal
+  - name: qb-pipeline
+  - name: rec-pipeline

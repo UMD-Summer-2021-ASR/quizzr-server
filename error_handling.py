@@ -2,6 +2,7 @@ import bson
 
 
 def to_oid_soft(v) -> tuple:
+    """Attempt to convert v to an ObjectId. Return v if the conversion fails."""
     if any([type(v) is dtype for dtype in [str, bytes, bson.ObjectId]]):
         try:
             result = bson.ObjectId(v)

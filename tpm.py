@@ -1,4 +1,3 @@
-import collections.abc
 import io
 import logging
 import os
@@ -16,9 +15,13 @@ import firebase_admin
 from firebase_admin import credentials
 from firebase_admin import storage
 
+from sv_errors import UserExistsError
+
 
 # Consists of mostly helper methods.
 class QuizzrTPM:
+    """"Third Party Manager"; a class containing helper methods for managing the data"""
+
     G_PATH_DELIMITER = "/"
 
     def __init__(self, database_name, app_config, secret_dir, rec_dir):
@@ -48,9 +51,9 @@ class QuizzrTPM:
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         self.user_ids = self.get_ids(self.users)
 
-    # Attach the given arguments to one unprocessed audio document and move it to the Audio collection.
-    # Additionally, update the recording history of the associated question and user.
     def update_processed_audio(self, arguments: Dict[str, Any]):
+        """Attach the given arguments to one unprocessed audio document and move it to the Audio collection.
+        Additionally, update the recording history of the associated question and user."""
         errs = []
         logging.debug(f"arguments = {arguments!r}")
         logging.debug("Retrieving arguments...")
@@ -115,6 +118,13 @@ class QuizzrTPM:
                 return "internal_error", "question_update_failure"
 
     def add_rec_to_user(self, user_id, rec_doc):
+        """
+        Push one recording document to the "recordedAudios" field of one user.
+
+        :param user_id: The internal ID of a user, defined by the _id field of a profile document
+        :param rec_doc: The recording document to append. Should contain the audio ID and recording type
+        :return: A tuple containing the type of error and the reason, or None if no error was encountered
+        """
         logging.debug("Updating user information...")
         if user_id is None:
             logging.warning("Parameter 'user_id' is undefined. Skipping update")
@@ -124,7 +134,13 @@ class QuizzrTPM:
             logging.warning(f"Could not update user with ID {user_id}")
             return "internal_error", "user_update_failure"
 
-    def add_recs_to_users(self, uid2rec_doc):
+    def add_recs_to_users(self, uid2rec_doc: Dict[str, dict]):
+        """
+        Push multiple recording documents to the "recordedAudios" field of each user.
+
+        :param uid2rec_doc: A dictionary mapping a user ID to a recording document to append
+        :return: An array of tuples each containing the type of error and the reason
+        """
         update_batch = []
         errs = []
         logging.debug("Updating user information...")
@@ -144,15 +160,15 @@ class QuizzrTPM:
         errs += [("internal_error", "user_update_failure")] * missed_results
         return errs
 
-    # Retrieve a file from Firebase Storage and store it in-memory.
     def get_file_blob(self, blob_path: str):
+        """Retrieve a file from Firebase Storage and store it in-memory."""
         blob = self.bucket.blob("/".join([self.app_config["BLOB_ROOT"], blob_path]))
         file_bytes = blob.download_as_bytes()
         fh = io.BytesIO(file_bytes)
         return fh
 
-    # Find and return the (processed) audio document with the best evaluation, applying a given projection.
     def find_best_audio_doc(self, recordings, required_fields=None, optional_fields=None, excluded_fields=None):
+        """Find and return the (processed) audio document with the best evaluation, applying a given projection."""
         query = {"_id": {"$in": [rec["id"] for rec in recordings]}, "version": self.app_config["VERSION"]}
         if self.audio.count_documents(query) == 0:
             logging.error("No audio documents found")
@@ -184,8 +200,8 @@ class QuizzrTPM:
         logging.error("Failed to find a viable audio document")
         return
 
-    # Generator function for getting questions from both collections.
     def find_questions(self, qids: list = None, **kwargs):
+        """Generator function for getting questions from both collections."""
         kwargs_c = deepcopy(kwargs)
 
         # Overrides _id argument in filter.
@@ -266,49 +282,57 @@ class QuizzrTPM:
             return questions, errors
         logging.error("Failed to find any viable unrecorded questions. Aborting")
 
-    # Utility methods for automatically updating the cached ID list. Deprecated.
+    # Utility methods for automatically updating the cached ID list.
     def insert_unrec_question(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.insert_one(*args, **kwargs)
         self.unrec_question_ids.append(results.inserted_id)
         return results
 
     def insert_unrec_questions(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.insert_many(*args, **kwargs)
         self.unrec_question_ids += results.inserted_ids
         return results
 
     def delete_unrec_question(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.delete_one(*args, **kwargs)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         return results
 
     def delete_unrec_questions(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.delete_many(*args, **kwargs)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         return results
 
     def insert_rec_question(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.insert_one(*args, **kwargs)
         self.rec_question_ids.append(results.inserted_id)
         return results
 
     def insert_rec_questions(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.insert_many(*args, **kwargs)
         self.rec_question_ids += results.inserted_ids
         return results
 
     def delete_rec_question(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.delete_one(*args, **kwargs)
         self.rec_question_ids = self.get_ids(self.rec_questions)
         return results
 
     def delete_rec_questions(self, *args, **kwargs):
+        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.delete_many(*args, **kwargs)
         self.rec_question_ids = self.get_ids(self.rec_questions)
         return results
 
-    # Upload multiple audio files to Google Drive.
     def upload_many(self, file_paths: List[str], subdir) -> Dict[str, str]:
+        """Upload multiple audio files to Firebase Cloud Storage."""
         # TODO: Actual BrokenPipeError handling
         file2blob = {}
 
@@ -323,10 +347,11 @@ class QuizzrTPM:
         return file2blob
 
     def get_blob_path(self, blob_name, subdir: str):
+        """Get the canonical name of a blob, which is <BLOB_ROOT>/<subdir>/<blob_name>"""
         return "/".join([self.app_config["BLOB_ROOT"], subdir, blob_name])
 
-    # Upload one audio file to Google Drive.
     def upload_one(self, file_path: str, subdir: str) -> str:
+        """Upload one audio file to Firebase Cloud Storage."""
         # TODO: Actual BrokenPipeError handling
         blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
         blob_path = self.get_blob_path(blob_name, subdir)
@@ -335,13 +360,13 @@ class QuizzrTPM:
 
         return blob_name
 
-    # Upload submission metadata to MongoDB.
     def mongodb_insert_submissions(
             self,
             sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
             sub2vtt,
             buzz_submissions):
+        """Upload submission metadata to MongoDB."""
         unproc_audio_batch = []
         audio_batch = []
         uid2rec_doc = {}
@@ -379,18 +404,25 @@ class QuizzrTPM:
             self.add_recs_to_users(uid2rec_doc)
         return unproc_results, proc_results
 
-    # Return a list of all document IDs based on a query.
     @staticmethod
     def get_ids(collection, query=None):
+        """
+        Return a list of all document IDs based on a query.
+
+        :param collection: pymongo Collection object
+        :param query: MongoDB filter argument
+        :return: The _ids of every document found
+        """
         ids = []
         id_cursor = collection.find(query, {"_id": 1})
         for i, doc in enumerate(id_cursor):
             ids.append(doc["_id"])
         return ids
 
-    # Given the list of difficulty limits and a difficulty type, return the boundaries as a MongoDB filter operator.
     @staticmethod
     def get_difficulty_query_op(difficulty_limits: list, difficulty):
+        """Given the list of difficulty limits and a difficulty type, return the boundaries as a MongoDB filter
+        operator."""
         lower_bound = difficulty_limits[difficulty - 1] + 1 if difficulty > 0 else None
         upper_bound = difficulty_limits[difficulty]
         query_op = {}
@@ -400,13 +432,67 @@ class QuizzrTPM:
             query_op["$lte"] = upper_bound
         return query_op
 
-    # Solution from: https://stackoverflow.com/questions/3232943/update-value-of-a-nested-dictionary-of-varying-depth
-    # Update a dictionary and all nested dictionaries.
-    @staticmethod
-    def _deep_update(d, u):
-        for k, v in u.items():
-            if isinstance(v, collections.abc.Mapping):
-                d[k] = QuizzrTPM._deep_update(d.get(k, {}), v)
-            else:
-                d[k] = v
-        return d
+    def get_profile(self, user_id: str, visibility: str):
+        """
+        Retrieve a User document from the associated MongoDB collection
+
+        :param user_id: The internal ID of the User document
+        :param visibility: How much of the profile to show. Valid values are "basic", "public", and "private"
+        :return: A document from the MongoDB Users collection
+        """
+        visibility_configs = self.app_config["VISIBILITY_CONFIGS"]
+        config = visibility_configs[visibility]
+        return self.database.get_collection(config["collection"]).find_one(user_id, config["projection"])
+
+    def create_profile(self, user_id: str, pfp: List[str], username: str):
+        """
+        Create a profile stub from the given parameters
+
+        :param user_id: The internal ID of a user, defined by the _id field of a profile document
+        :param pfp: Freeform array for the profile. Potential values can be for color, the types of images to use, etc.
+        :param username: The public name of the user. Must not conflict with any existing usernames
+        :return: A pymongo InsertOneResult object. See documentation for further details
+        :raise UserExistsError: When there is an existing user profile with the given username
+        :raise pymongo.errors.DuplicateKeyError:
+        """
+        # TODO: Get from API specs
+        profile_stub = {
+            "_id": None,
+            "pfp": None,
+            "username": None,
+            "usernameSpecs": "",
+            "rating": 0,
+            "totalQuestionsPlayed": 0,
+            "totalGames": 0,
+            "coins": 0,
+            "coinsCumulative": 0,
+            "activityOverview": [],
+            "recordedAudios": [],
+            "permLevel": "normal"
+        }
+        profile_stub["_id"] = user_id
+        profile_stub["pfp"] = pfp
+        profile_stub["username"] = username
+        if self.users.find_one({"username": username}) is not None:
+            logging.error(f"User {username!r} already exists. Aborting")
+            raise UserExistsError(username)
+        return self.users.insert_one(profile_stub)
+
+    def modify_profile(self, user_id: str, update_args: Dict[str, Any]):
+        """
+        Modify a user profile
+
+        :param user_id: The internal ID of a user, defined by the _id field of a profile document
+        :param update_args: The fields to replace and their corresponding values
+        :return: A pymongo UpdateResult object. See documentation for further details
+        """
+        return self.users.update_one({"_id": user_id}, {"$set": update_args})
+
+    def delete_profile(self, user_id):
+        """
+        Delete a user profile
+
+        :param user_id: The internal ID of a user, defined by the _id field of a profile document
+        :return: A pymongo DeleteResult object. See documentation for further details
+        """
+        return self.users.delete_one({"_id": user_id})

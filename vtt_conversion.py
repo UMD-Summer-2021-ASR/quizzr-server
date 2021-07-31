@@ -4,8 +4,8 @@ from typing import Tuple, Iterable
 import gentle
 
 
-# Convert a Gentle Word object into a VTT cue.
 def aligned_word_to_vtt_cue(word_entry):
+    """Convert a Gentle Word object into a VTT cue."""
     to_symbol = " --> "
     if word_entry.case != "success":
         return
@@ -19,8 +19,8 @@ def aligned_word_to_vtt_cue(word_entry):
     return "\n".join([timestamp_header, caption])
 
 
-# Convert a series of Gentle Word objects into a VTT string.
 def gentle_alignment_to_vtt(words: Iterable[gentle.transcription.Word]) -> str:
+    """Convert a series of Gentle Word objects into a VTT string."""
     vtt = "WEBVTT Kind: captions; Language: en"
     gap = "\n\n"
     for word_entry in words:
@@ -30,15 +30,15 @@ def gentle_alignment_to_vtt(words: Iterable[gentle.transcription.Word]) -> str:
     return vtt
 
 
-# Convert seconds into a properly-formatted ISO timestamp (00:MM:SS.FFFFFF)
 def seconds_to_isoformat(seconds: float) -> str:
+    """Convert seconds into a properly-formatted ISO timestamp (00:MM:SS.FFFFFF)"""
     minutes, seconds, microseconds = divide_seconds(seconds)
     return time(minute=minutes, second=seconds, microsecond=microseconds).isoformat()
 
 
-# Split up seconds into a tuple of minutes, seconds, and microseconds.
-# Postcondition: 0 <= minutes < 60, 0 <= seconds < 60, 0 <= microseconds < 1000000
 def divide_seconds(seconds: float) -> Tuple[int, int, int]:
+    """Split up seconds into a tuple of minutes, seconds, and microseconds.
+    Postcondition: 0 <= minutes < 60, 0 <= seconds < 60, 0 <= microseconds < 1000000"""
     microseconds = seconds * 1e+6
     minutes = seconds // 60
     return int(minutes % 60), int(seconds % 60), int(microseconds % 1e+6)
