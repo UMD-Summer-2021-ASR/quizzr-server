@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from http import HTTPStatus
 
+import pymongo.errors
 from firebase_admin import auth
 from fuzzywuzzy import fuzz
 
@@ -374,6 +375,8 @@ def create_app(test_overrides=None, test_inst_path=None):
             args = request.get_json()
             try:
                 result = qtpm.create_profile(user_id, args["pfp"], args["username"])
+            except pymongo.errors.DuplicateKeyError:
+                return "already_registered", HTTPStatus.BAD_REQUEST
             except UserExistsError as e:
                 return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
             if result:
@@ -546,11 +549,6 @@ def create_app(test_overrides=None, test_inst_path=None):
         # return {"uid": app.config["DEV_UID"]}
         id_token = request.headers.get("Authorization")
 
-        # Cut off prefix if it is present
-        prefix = "Bearer "
-        if id_token.startswith(prefix):
-            id_token = id_token[len(prefix):]
-
         id_token_log = _get_private_data_string(id_token)
         app.logger.debug(f"id_token = {id_token_log}")
         if not id_token:
@@ -558,6 +556,12 @@ def create_app(test_overrides=None, test_inst_path=None):
                 abort(HTTPStatus.UNAUTHORIZED)
             else:
                 return {"uid": app.config["DEV_UID"]}
+
+        # Cut off prefix if it is present
+        prefix = "Bearer "
+        if id_token.startswith(prefix):
+            id_token = id_token[len(prefix):]
+
         try:
             decoded = auth.verify_id_token(id_token)
         except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError) as e:
