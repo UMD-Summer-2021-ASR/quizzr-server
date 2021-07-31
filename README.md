@@ -34,6 +34,9 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
   * `unkToken` The value of the aligned word to look for when detecting out-of-vocabulary words.
   * `minAccuracy` The minimum acceptable accuracy of a submission.
   * `queueLimit` The maximum number of submissions to pre-screen at once.
+* `DEV_UID` The default user ID of an unauthenticated user in a `development` environment.
+* `LOG_PRIVATE_DATA` Redact sensitive information, such as Firebase ID tokens, in log messages.
+* `VISIBILITY_CONFIGS` A set of configurations that determine which collection to retrieve a profile from and what projection to apply. Projections are objects with the key being the field name and the value being 1 or 0, representing whether to include or exclude the field.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
@@ -56,7 +59,22 @@ The following JSON data shows the default values of each configuration field. Yo
     "minAccuracy": 0.5,
     "queueLimit": 32
   },
-  "DEV_UID": "dev"
+  "DEV_UID": "dev",
+  "LOG_PRIVATE_DATA": false,
+  "VISIBILITY_CONFIGS": {
+    "basic": {
+      "projection": {"pfp": 1, "username": 1, "usernameSpecs": 1},
+      "collection": "Users"
+    },
+    "public": {
+      "projection": {"pfp": 1, "username": 1, "usernameSpecs": 1},
+      "collection": "Users"
+    },
+    "private": {
+      "projection": {"_id": 0},
+      "collection": "Users"
+    }
+  }
 }
 ```
 

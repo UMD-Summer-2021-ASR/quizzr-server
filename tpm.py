@@ -453,6 +453,7 @@ class QuizzrTPM:
         :param username: The public name of the user. Must not conflict with any existing usernames
         :return: A pymongo InsertOneResult object. See documentation for further details
         :raise UserExistsError: When there is an existing user profile with the given username
+        :raise pymongo.errors.DuplicateKeyError:
         """
         # TODO: Get from API specs
         profile_stub = {
