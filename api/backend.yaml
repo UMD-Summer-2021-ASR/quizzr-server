@@ -1,16 +1,18 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.2.0
+  version: 0.3.0
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
     name: Christopher Rapp
     email: christopher.michael.rapp@gmail.com
 servers:
-  - url: 'http://localhost:3000'
+  - url: 'http://localhost:5000'
+  - url: 'http://localhost:4455'
+    description: Proxy
   - url: 'https://quizzr.stoplight.io'
-    description: a
+    description: Stoplight website
 paths:
   /answer:
     get:
@@ -478,7 +480,11 @@ paths:
           description: Internal Server Error
       operationId: get_other_profile
       description: Retrieve the public profile of another user
-      parameters: []
+      parameters:
+        - schema: {}
+          in: query
+          name: basic
+          description: Include this keyword to get a reduced public profile.
       security:
         - Firebase-Auth: []
     patch:
@@ -728,6 +734,32 @@ paths:
                       recDifficulty: 4
         description: A batch of unrecorded question documents.
       parameters: []
+  /validate:
+    get:
+      summary: Verify Firebase ID Token
+      tags:
+        - internal
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject:
+                    $ref: '#/components/schemas/Permission-Level'
+                  extra:
+                    type: object
+                    description: Always empty
+                required:
+                  - subject
+                  - extra
+              examples: {}
+        '401':
+          description: Unauthorized
+      operationId: check_token
+      description: 'Attempts to validate the Firebase ID token given in the Authorization header. Note: The same behavior occurs with `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `TRACE`.'
 components:
   schemas:
     Audio-Id:
