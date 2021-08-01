@@ -39,10 +39,9 @@ class QuizzrWatcher:
 
         sys.exit(0)
 
-    # Return a list of submission names. Submissions have a WAV file and an associated JSON metadata file.
     @staticmethod
     def queue_submissions(directory: str, size_limit: int = None):
-        # TODO: Add queue size limit.
+        """Get up to <size_limit> submission names"""
         found_files = os.listdir(directory)
         queued_submissions = set()
         for i, found_file in enumerate(found_files):
@@ -58,7 +57,6 @@ class QuizzrProcessor:
         self.submission_file_types = submission_file_types
         self.config = config
         self.DIRECTORY = directory
-        self.SUBMISSION_FILE_TYPES = ["wav", "json", "vtt"]
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
@@ -71,9 +69,9 @@ class QuizzrProcessor:
         self.whitespace_regex = re.compile(r"\s+")
         self.ERROR_ACCURACY = -1.0
 
-    # Pre-screen all given normal submissions and return the ones that passed the pre-screening.
-    # Return buzz recordings immediately.
     def pick_submissions(self, submissions: List[str]) -> dict:
+        """Pre-screen all given normal submissions and return the ones that passed the pre-screening.
+        Return buzz recordings immediately."""
         logging.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
         logging.debug(f"sub2meta = {sub2meta!r}")
@@ -108,10 +106,10 @@ class QuizzrProcessor:
             logging.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins.")
         return final_results
 
-    # Return the accuracy and VTT data of each submission.
     def preprocess_submissions(self,
                                submissions: List[str],
                                sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Union[float, str]]]:
+        """Return the accuracy and VTT data of each submission."""
         # TODO: Make into batches if possible.
         logging.info(f"Evaluating {len(submissions)} submission(s)...")
 
@@ -167,8 +165,8 @@ class QuizzrProcessor:
         return results
 
     # ****************** HELPER METHODS *********************
-    # Do a forced alignment and return the percentage of words aligned (or known) along with the VTT.
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
+        """Do a forced alignment and return the percentage of words aligned (or known) along with the VTT."""
         total_words = len(self.process_transcript(r_transcript))
         total_aligned_words = 0
         try:
@@ -185,12 +183,12 @@ class QuizzrProcessor:
 
         return total_aligned_words / total_words, vtt
 
-    # Return a list of words without punctuation or capitalization from a transcript.
     def process_transcript(self, t: str) -> List[str]:
+        """Return a list of words without punctuation or capitalization from a transcript."""
         return re.split(self.whitespace_regex, re.sub(self.punc_regex, " ", t).lower())
 
-    # Return the metadata of each submission (a JSON file) if available.
     def get_metadata(self, submissions: List[str]) -> Dict[str, Dict[str, str]]:
+        """Return the metadata of each submission (a JSON file) if available."""
         sub2meta = {}
         for submission in submissions:
             submission_path = os.path.join(self.DIRECTORY, submission)
@@ -201,8 +199,8 @@ class QuizzrProcessor:
         return sub2meta
 
     @staticmethod
-    # Divide the submissions by the recording type.
     def categorize_submissions(submissions, sub2meta):
+        """Divide the submissions by the recording type."""
         typed_submissions = {}
         for submission in submissions:
             submission_type = sub2meta[submission]["recType"]
@@ -277,8 +275,8 @@ class QuizzrProcessor:
         self.users.bulk_write(u_batch)"""
 
 
-# Remove a submission from disk.
 def delete_submission(directory, submission_name, file_types):
+    """Remove a submission from disk."""
     # TODO: Make it find all files with submission_name instead.
     submission_path = os.path.join(directory, submission_name)
     for ext in file_types:
