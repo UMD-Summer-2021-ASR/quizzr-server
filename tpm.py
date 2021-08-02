@@ -3,6 +3,7 @@ import logging
 import os
 import random
 from copy import deepcopy
+from datetime import datetime
 from typing import Dict, Any, List
 from secrets import token_urlsafe
 
@@ -12,9 +13,9 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 
 import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import storage
+from firebase_admin import credentials, storage
 
+from sv_api import QuizzrAPISpec
 from sv_errors import UserExistsError
 
 
@@ -24,12 +25,13 @@ class QuizzrTPM:
 
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name, app_config, secret_dir, rec_dir):
+    def __init__(self, database_name, app_config, secret_dir, rec_dir, api: QuizzrAPISpec):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
         self.app_config = app_config
 
         self.SECRET_DATA_DIR = secret_dir
         self.REC_DIR = rec_dir
+        self.api = api
 
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
         cred = credentials.Certificate(os.path.join(self.SECRET_DATA_DIR, "firebase_storage_key.json"))
@@ -455,27 +457,14 @@ class QuizzrTPM:
         :raise UserExistsError: When there is an existing user profile with the given username
         :raise pymongo.errors.DuplicateKeyError:
         """
-        # TODO: Get from API specs
-        profile_stub = {
-            "_id": None,
-            "pfp": None,
-            "username": None,
-            "usernameSpecs": "",
-            "rating": 0,
-            "totalQuestionsPlayed": 0,
-            "totalGames": 0,
-            "coins": 0,
-            "coinsCumulative": 0,
-            "activityOverview": [],
-            "recordedAudios": [],
-            "permLevel": "normal"
-        }
-        profile_stub["_id"] = user_id
-        profile_stub["pfp"] = pfp
-        profile_stub["username"] = username
         if self.users.find_one({"username": username}) is not None:
             logging.error(f"User {username!r} already exists. Aborting")
             raise UserExistsError(username)
+        profile_stub = self.api.get_schema_stub("User")
+        profile_stub["_id"] = user_id
+        profile_stub["pfp"] = pfp
+        profile_stub["username"] = username
+        profile_stub["creationDate"] = datetime.now().isoformat()
         return self.users.insert_one(profile_stub)
 
     def modify_profile(self, user_id: str, update_args: Dict[str, Any]):

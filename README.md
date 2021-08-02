@@ -3,13 +3,22 @@
 ## Overview
 The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
 
+## Prerequisites
+Prior to installing the server, either through Docker (see [Using Docker](#Using-Docker)) or directly onto your machine, make sure you have addressed the following prerequisites:
+* Python 3.8 with `pip` installed (does not apply with Docker).
+* A MongoDB Atlas with the following (see [Get Started with Atlas](https://docs.atlas.mongodb.com/getting-started/), parts 1-5, for more information):
+  * An Atlas account; 
+  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "RecordedQuestions", "UnrecordedQuestions", and "Users" collections, all of which are not capped;
+  * A database user with permission to read and write to all collections in the database; and
+  * A connection through the database user with a Python driver version 3.6 or later.
+* A Firebase project with the Cloud Storage service enabled and a connection to the project through an Admin SDK set up (see [Cloud Storage for Firebase](https://firebase.google.com/docs/storage/#implementation_path) and [Add the Firebase Admin SDK to your server](https://firebase.google.com/docs/admin/setup) respectively for more information).
+
 ## Installation
-Prior to installation, you will need to have `pip` installed.
 1. Clone this repository.
 1. Install all the necessary dependencies by executing `pip install -r requirements.txt` in the folder of the repository. It may be a good idea to set up a virtual environment prior to doing this step to avoid conflicts with already installed packages.
 1. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the associated README.md document. If you are installing it through the source code on a Linux operating system, you may need to change `install_deps.sh` to be based on your distribution. You will need to modify the `wget` command in `install_models.sh` to include the `--no-check-certificate` flag because the certificate for accessing `https://www.lowerquality.com` has expired.
 1. Create a directory for the instance path of the server. By default, it is `~/quizzr_server`, but it can be overridden by the `Q_INST_PATH` environment variable or the `test_inst_path` parameter in the app factory function, `create_app`. In the instance path, create another directory called `secrets`.
-1. Login to the Quizzr Google Account on Firebase and navigate to the Project settings --> Service accounts. Generate a private key for the Firebase Admin SDK service account and store it at `secrets/firebase_storage_key.json`.
+1. Generate a private key for the Firebase Admin SDK service account and store it at `secrets/firebase_storage_key.json`.
 
 ### Updating
 To update the repository on your machine, either use `git pull` (requires you to commit your changes) or reinstall the repository.
@@ -37,6 +46,7 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `DEV_UID` The default user ID of an unauthenticated user in a `development` environment.
 * `LOG_PRIVATE_DATA` Redact sensitive information, such as Firebase ID tokens, in log messages.
 * `VISIBILITY_CONFIGS` A set of configurations that determine which collection to retrieve a profile from and what projection to apply. Projections are objects with the key being the field name and the value being 1 or 0, representing whether to include or exclude the field.
+* `USE_ID_TOKENS` A configuration option specifying whether to use a Firebase ID token or to use the raw contents for identifying the user. Has no effect when `TESTING` is False.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
@@ -74,7 +84,8 @@ The following JSON data shows the default values of each configuration field. Yo
       "projection": {"_id": 0},
       "collection": "Users"
     }
-  }
+  },
+  "USE_ID_TOKENS": true
 }
 ```
 
@@ -111,4 +122,4 @@ Notes:
 * You will need to have the private Firebase key in the mounting directory (see [Installation](#Installation)).
 
 ## Endpoints
-All documentation for the endpoints has been moved to [api/backend.yaml](api/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.
+All documentation for the endpoints has been moved to [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.

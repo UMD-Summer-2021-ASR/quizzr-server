@@ -379,11 +379,12 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  type: string
+                  $ref: '#/components/schemas/Username'
               required:
                 - pfp
                 - username
@@ -393,7 +394,7 @@ paths:
                   pfp:
                     - 0
                   username: John Doe
-        description: The profile arguments. Extremely limited because this is executed anonymously.
+        description: The fields to set in the profile
       tags:
         - frontend
       parameters: []
@@ -420,14 +421,15 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  type: string
+                  $ref: '#/components/schemas/Username'
                 usernameSpecs:
                   $ref: '#/components/schemas/Username-Specs'
-        description: The fields to update. Can include any of the properties listed below.
+        description: The fields to update. Can include any of the properties listed in the schema.
       tags:
         - frontend
       security:
@@ -516,7 +518,7 @@ paths:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  type: string
+                  $ref: '#/components/schemas/username'
                 usernameSpecs:
                   $ref: '#/components/schemas/Username-Specs'
                 rating:
@@ -819,7 +821,7 @@ components:
       description: The public profile of a user
       properties:
         username:
-          type: string
+          $ref: '#/components/schemas/Username'
         usernameSpecs:
           $ref: '#/components/schemas/Username-Specs'
         pfp:
@@ -844,6 +846,8 @@ components:
       examples:
         - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
           recType: normal
+        - id: ''
+          recType: ''
     Rec-Type:
       type: string
       title: Rec-Type
@@ -853,6 +857,7 @@ components:
         - buzz
       examples:
         - normal
+        - ''
     Str-ObjectId:
       type: string
       title: Str-ObjectId
@@ -862,6 +867,7 @@ components:
       description: String representation of an ObjectId
       examples:
         - 9174ea6cb092348d950a2f65
+        - 000000000000000000000000
     User:
       title: User
       type: object
@@ -872,7 +878,7 @@ components:
         pfp:
           $ref: '#/components/schemas/PFP-Specs'
         username:
-          type: string
+          $ref: '#/components/schemas/Username'
         usernameSpecs:
           $ref: '#/components/schemas/Username-Specs'
         rating:
@@ -895,6 +901,13 @@ components:
             $ref: '#/components/schemas/Recording'
         permLevel:
           $ref: '#/components/schemas/Permission-Level'
+        playTime:
+          type: integer
+          description: Total amount of time the user has played for, measured in seconds.
+        creationDate:
+          type: string
+          format: date
+          description: The date and time the user's account was created. Should be UTC
       required:
         - _id
         - pfp
@@ -908,6 +921,8 @@ components:
         - activityOverview
         - recordedAudios
         - permLevel
+        - playTime
+        - creationDate
       examples:
         - _id: kaJ73KMV78tIj3a92xmn83ikjla1
           pfp:
@@ -925,6 +940,30 @@ components:
             - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
               recType: normal
           permLevel: normal
+          playTime: 1234
+          creationDate: 2019-08-24T14:15:22Z
+        - _id: ''
+          pfp: []
+          username: ''
+          usernameSpecs: ''
+          rating: 0
+          totalQuestionsPlayed: 0
+          totalGames: 0
+          coins: 0
+          coinsCumulative: 0
+          activityOverview: []
+          recordedAudios: []
+          permLevel: normal
+          playTime: 0
+          creationDate: ''
+    Username:
+      title: Username
+      type: string
+      description: The name of the user
+      minLength: 1
+      examples:
+        - John Doe
+        - Unknown
     Username-Specs:
       title: Username-Specs
       type: string
@@ -942,10 +981,11 @@ components:
       type: string
       title: User-Id
       description: Firebase User ID
-      pattern: '^[A-Za-z0-9]{28}'
+      pattern: '^[A-Za-z0-9]+'
       examples:
         - kaJ73KMV78tIj3a92xmn83ikjla1
-      minLength: 28
+        - ''
+      minLength: 1
       maxLength: 28
     VTT:
       title: VTT
@@ -966,6 +1006,7 @@ components:
 
           00:01:01.123456 --> 00:01:02.123456
           <v Speaker 2>WORD4
+        - ''
   parameters:
     BlobPath:
       name: blob_path
