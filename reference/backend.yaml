@@ -350,6 +350,8 @@ paths:
                     activityOverview: []
                     recordedAudios: []
                     permLevel: normal
+                    playTime: 0
+                    creationDate: '2019-08-24T14:15:22.124643Z'
         '401':
           description: Unauthorized
         '403':
@@ -518,7 +520,7 @@ paths:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  $ref: '#/components/schemas/username'
+                  $ref: '#/components/schemas/Username'
                 usernameSpecs:
                   $ref: '#/components/schemas/Username-Specs'
                 rating:
@@ -867,11 +869,44 @@ components:
       description: String representation of an ObjectId
       examples:
         - 9174ea6cb092348d950a2f65
-        - 000000000000000000000000
+        - 0
     User:
       title: User
       type: object
       description: 'The full profile of a user, including "private" information. This is a MongoDB document in the Users collection.'
+      examples:
+        - _id: kaJ73KMV78tIj3a92xmn83ikjla1
+          pfp:
+            - 0
+          username: John Doe
+          usernameSpecs: ''
+          rating: 0
+          totalQuestionsPlayed: 0
+          totalGames: 0
+          coins: 0
+          coinsCumulative: 0
+          activityOverview:
+            - id: string
+          recordedAudios:
+            - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+              recType: normal
+          permLevel: normal
+          playTime: 1234
+          creationDate: '2019-08-24T14:15:22Z'
+        - _id: ''
+          pfp: []
+          username: ''
+          usernameSpecs: ''
+          rating: 0
+          totalQuestionsPlayed: 0
+          totalGames: 0
+          coins: 0
+          coinsCumulative: 0
+          activityOverview: []
+          recordedAudios: []
+          permLevel: normal
+          playTime: 0
+          creationDate: ''
       properties:
         _id:
           $ref: '#/components/schemas/User-Id'
@@ -903,10 +938,10 @@ components:
           $ref: '#/components/schemas/Permission-Level'
         playTime:
           type: integer
-          description: Total amount of time the user has played for, measured in seconds.
+          description: 'Total amount of time the user has played for, measured in seconds.'
         creationDate:
           type: string
-          format: date
+          format: date-time
           description: The date and time the user's account was created. Should be UTC
       required:
         - _id
@@ -923,39 +958,6 @@ components:
         - permLevel
         - playTime
         - creationDate
-      examples:
-        - _id: kaJ73KMV78tIj3a92xmn83ikjla1
-          pfp:
-            - 0
-          username: John Doe
-          usernameSpecs: ''
-          rating: 0
-          totalQuestionsPlayed: 0
-          totalGames: 0
-          coins: 0
-          coinsCumulative: 0
-          activityOverview:
-            - id: string
-          recordedAudios:
-            - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
-              recType: normal
-          permLevel: normal
-          playTime: 1234
-          creationDate: 2019-08-24T14:15:22Z
-        - _id: ''
-          pfp: []
-          username: ''
-          usernameSpecs: ''
-          rating: 0
-          totalQuestionsPlayed: 0
-          totalGames: 0
-          coins: 0
-          coinsCumulative: 0
-          activityOverview: []
-          recordedAudios: []
-          permLevel: normal
-          playTime: 0
-          creationDate: ''
     Username:
       title: Username
       type: string
