@@ -3,7 +3,7 @@ import logging
 import os
 import random
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from http import HTTPStatus
 from secrets import token_urlsafe
 
@@ -118,7 +118,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         app_conf["PROC_CONFIG"],
         app_conf["SUBMISSION_FILE_TYPES"]
     )
-    backend_keys = {}
+    socket_server_key = {}
     # TODO: multiprocessing
 
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
@@ -369,27 +369,24 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Retrieve a file from Firebase Storage."""
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
-    @app.post("/game/key")
+    @app.post("/socket/key")
     def generate_game_key():
-        """Generate a secret key for a game."""
-        key = token_urlsafe(256)
-        body = request.get_json()
-        key_name = body["name"]
-        if key_name in backend_keys:
-            abort(HTTPStatus.BAD_REQUEST)
-        backend_keys[key_name] = {"value": key, "expiry": datetime.now() + timedelta(hours=1)}
-        return key
+        """Generate a secret key to represent the socket server.
 
-    @app.put("/game/results")
+        WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
+        if socket_server_key:
+            return {"err_id": "secret_key_exists",
+                    "err": "A secret key has already been generated."}, HTTPStatus.UNAUTHORIZED
+        key = token_urlsafe(256)
+        socket_server_key["value"] = key
+        return {"key": key}
+
+    @app.put("/game_results")
     def handle_game_results():
         """Update the database with the results of a game session."""
-        body = request.get_json()
-        key = backend_keys[body["name"]]
-        if body["key"] != key["value"]:
+        if request.headers.get("Authorization") != socket_server_key["value"]:
             abort(HTTPStatus.UNAUTHORIZED)
-        if datetime.now() > key["expiry"]:
-            return "expired_key", HTTPStatus.FORBIDDEN
-        return {"msg": "This feature is not implemented yet."}
+        return {"err": "This feature is not implemented yet.", "err_id": "not_implemented"}, HTTPStatus.NOT_FOUND
 
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
