@@ -5,18 +5,22 @@ import random
 import sys
 from datetime import datetime
 from http import HTTPStatus
+from secrets import token_urlsafe
 
+import jsonschema.exceptions
 import pymongo.errors
 from firebase_admin import auth
 from fuzzywuzzy import fuzz
 
 import bson.json_util
-from flask import Flask, request, render_template, send_file
+from flask import Flask, request, render_template, send_file, make_response
 from flask_cors import CORS
+from openapi_schema_validator import validate
 from werkzeug.exceptions import abort
 
 import error_handling
 import rec_processing
+from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
 from sv_errors import UserExistsError, ProfileNotFoundError, MalformedProfileError
 
@@ -72,7 +76,8 @@ def create_app(test_overrides=None, test_inst_path=None):
                 "projection": {"_id": 0},
                 "collection": "Users"
             }
-        }
+        },
+        "USE_ID_TOKENS": True
     }
 
     config_dir = os.path.join(path, "config")
@@ -102,17 +107,18 @@ def create_app(test_overrides=None, test_inst_path=None):
     if not os.path.exists(secret_dir):
         os.makedirs(secret_dir)
 
-    app_conf["SERVER_DIR"] = server_dir
     app_conf["REC_DIR"] = rec_dir
+    api = QuizzrAPISpec(os.path.join(server_dir, "reference", "backend.yaml"))
 
     app.config.from_mapping(app_conf)
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir)
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir, api)
     qp = rec_processing.QuizzrProcessor(
         qtpm.database,
         rec_dir,
         app_conf["PROC_CONFIG"],
         app_conf["SUBMISSION_FILE_TYPES"]
     )
+    socket_server_key = {}
     # TODO: multiprocessing
 
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
@@ -363,6 +369,25 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Retrieve a file from Firebase Storage."""
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
+    @app.post("/socket/key")
+    def generate_game_key():
+        """Generate a secret key to represent the socket server.
+
+        WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
+        if socket_server_key:
+            return {"err_id": "secret_key_exists",
+                    "err": "A secret key has already been generated."}, HTTPStatus.UNAUTHORIZED
+        key = token_urlsafe(256)
+        socket_server_key["value"] = key
+        return {"key": key}
+
+    @app.put("/game_results")
+    def handle_game_results():
+        """Update the database with the results of a game session."""
+        if request.headers.get("Authorization") != socket_server_key["value"]:
+            abort(HTTPStatus.UNAUTHORIZED)
+        return {"err": "This feature is not implemented yet.", "err_id": "not_implemented"}, HTTPStatus.NOT_FOUND
+
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
         """A resource to automatically point to the user's own profile."""
@@ -373,19 +398,38 @@ def create_app(test_overrides=None, test_inst_path=None):
             return qtpm.get_profile(user_id, "private")
         elif request.method == "POST":
             args = request.get_json()
+            path, op = api.path_for("modify_profile")
+            schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
+            err = _validate_args(args, schema)
+            if err:
+                return err
             try:
                 result = qtpm.create_profile(user_id, args["pfp"], args["username"])
             except pymongo.errors.DuplicateKeyError:
+                app.logger.error("User already registered. Aborting")
                 return "already_registered", HTTPStatus.BAD_REQUEST
             except UserExistsError as e:
+                app.logger.error(f"User already exists: {e}. Aborting")
                 return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
             if result:
+                app.logger.info("User successfully created")
                 return "user_created", HTTPStatus.CREATED
+            app.logger.error("Encountered an unknown error")
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
         elif request.method == "PATCH":
-            # TODO: Deny permission for modifying unwanted fields.
+            path, op = api.path_for("modify_profile")
             update_args = request.get_json()
-            result = qtpm.modify_profile(user_id, update_args)
+            schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
+            err = _validate_args(update_args, schema)
+            if err:
+                return err
+
+            try:
+                result = qtpm.modify_profile(user_id, update_args)
+            except UserExistsError as e:
+                app.logger.error(f"User already exists: {e}. Aborting")
+                return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
+
             if result:
                 return "user_modified", HTTPStatus.OK
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
@@ -553,6 +597,10 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         id_token_log = _get_private_data_string(id_token)
         app.logger.debug(f"id_token = {id_token_log}")
+
+        if app.config["TESTING"] and not app.config["USE_ID_TOKENS"] and id_token:
+            return {"uid": id_token}
+
         if not id_token:
             if app.config["Q_ENV"] == PROD_ENV_NAME:
                 abort(HTTPStatus.UNAUTHORIZED)
@@ -604,5 +652,23 @@ def create_app(test_overrides=None, test_inst_path=None):
         if "permLevel" not in profile:
             raise MalformedProfileError(f"Field 'permLevel' not found in profile for user '{user_id}'")
         return profile["permLevel"]
+
+    def _validate_args(args: dict, schema: dict):
+        """
+        Shortcut for logic flow of schema validation when handling requests.
+
+        :param args: The value to validate
+        :param schema: The schema to use
+        :return: An error response if the schema is invalid
+        """
+        try:
+            validate(args, schema)
+            err = None
+        except jsonschema.exceptions.ValidationError as e:
+            app.logger.error(f"Request arguments do not match schema: {e}")
+            response = make_response(str(e))
+            response.headers["Content-Type"] = "text/plain"
+            err = (response, HTTPStatus.BAD_REQUEST)
+        return err
 
     return app

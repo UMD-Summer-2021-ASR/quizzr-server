@@ -1,16 +1,18 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.2.0
+  version: 0.3.1
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
     name: Christopher Rapp
     email: christopher.michael.rapp@gmail.com
 servers:
-  - url: 'http://localhost:3000'
+  - url: 'http://localhost:5000'
+  - url: 'http://localhost:4455'
+    description: Proxy
   - url: 'https://quizzr.stoplight.io'
-    description: a
+    description: Stoplight website
 paths:
   /answer:
     get:
@@ -348,6 +350,8 @@ paths:
                     activityOverview: []
                     recordedAudios: []
                     permLevel: normal
+                    playTime: 0
+                    creationDate: '2019-08-24T14:15:22.124643Z'
         '401':
           description: Unauthorized
         '403':
@@ -377,11 +381,12 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  type: string
+                  $ref: '#/components/schemas/Username'
               required:
                 - pfp
                 - username
@@ -391,7 +396,7 @@ paths:
                   pfp:
                     - 0
                   username: John Doe
-        description: The profile arguments. Extremely limited because this is executed anonymously.
+        description: The fields to set in the profile
       tags:
         - frontend
       parameters: []
@@ -418,14 +423,15 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               properties:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  type: string
+                  $ref: '#/components/schemas/Username'
                 usernameSpecs:
                   $ref: '#/components/schemas/Username-Specs'
-        description: The fields to update. Can include any of the properties listed below.
+        description: The fields to update. Can include any of the properties listed in the schema.
       tags:
         - frontend
       security:
@@ -478,7 +484,11 @@ paths:
           description: Internal Server Error
       operationId: get_other_profile
       description: Retrieve the public profile of another user
-      parameters: []
+      parameters:
+        - schema: {}
+          in: query
+          name: basic
+          description: Include this keyword to get a reduced public profile.
       security:
         - Firebase-Auth: []
     patch:
@@ -510,7 +520,7 @@ paths:
                 pfp:
                   $ref: '#/components/schemas/PFP-Specs'
                 username:
-                  type: string
+                  $ref: '#/components/schemas/Username'
                 usernameSpecs:
                   $ref: '#/components/schemas/Username-Specs'
                 rating:
@@ -728,6 +738,89 @@ paths:
                       recDifficulty: 4
         description: A batch of unrecorded question documents.
       parameters: []
+  /validate:
+    get:
+      summary: Verify Firebase ID Token
+      tags:
+        - internal
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject:
+                    $ref: '#/components/schemas/Permission-Level'
+                  extra:
+                    type: object
+                    description: Always empty
+                required:
+                  - subject
+                  - extra
+              examples: {}
+        '401':
+          description: Unauthorized
+      operationId: check_token
+      description: 'Attempts to validate the Firebase ID token given in the Authorization header. Note: The same behavior occurs with `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `TRACE`.'
+  /socket/key:
+    post:
+      summary: Generate Socket Server Key
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                    description: The secret key generated
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error-Msg-JSON'
+      operationId: generate_game_key
+      description: |-
+        Generate a secret key to represent the socket server.
+
+        **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
+    parameters: []
+  /game_results:
+    put:
+      summary: Send Game Session Results
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '401':
+          description: Unauthorized
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error-Msg-JSON'
+      operationId: handle_game_results
+      description: Update the database with the results of a game session.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+        description: Not implemented yet
+      parameters: []
+      security:
+        - Internal-Auth: []
+    parameters: []
 components:
   schemas:
     Audio-Id:
@@ -787,7 +880,7 @@ components:
       description: The public profile of a user
       properties:
         username:
-          type: string
+          $ref: '#/components/schemas/Username'
         usernameSpecs:
           $ref: '#/components/schemas/Username-Specs'
         pfp:
@@ -812,6 +905,8 @@ components:
       examples:
         - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
           recType: normal
+        - id: ''
+          recType: ''
     Rec-Type:
       type: string
       title: Rec-Type
@@ -821,6 +916,7 @@ components:
         - buzz
       examples:
         - normal
+        - ''
     Str-ObjectId:
       type: string
       title: Str-ObjectId
@@ -830,17 +926,51 @@ components:
       description: String representation of an ObjectId
       examples:
         - 9174ea6cb092348d950a2f65
+        - 0
     User:
       title: User
       type: object
       description: 'The full profile of a user, including "private" information. This is a MongoDB document in the Users collection.'
+      examples:
+        - _id: kaJ73KMV78tIj3a92xmn83ikjla1
+          pfp:
+            - 0
+          username: John Doe
+          usernameSpecs: ''
+          rating: 0
+          totalQuestionsPlayed: 0
+          totalGames: 0
+          coins: 0
+          coinsCumulative: 0
+          activityOverview:
+            - id: string
+          recordedAudios:
+            - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+              recType: normal
+          permLevel: normal
+          playTime: 1234
+          creationDate: '2019-08-24T14:15:22Z'
+        - _id: ''
+          pfp: []
+          username: ''
+          usernameSpecs: ''
+          rating: 0
+          totalQuestionsPlayed: 0
+          totalGames: 0
+          coins: 0
+          coinsCumulative: 0
+          activityOverview: []
+          recordedAudios: []
+          permLevel: normal
+          playTime: 0
+          creationDate: ''
       properties:
         _id:
           $ref: '#/components/schemas/User-Id'
         pfp:
           $ref: '#/components/schemas/PFP-Specs'
         username:
-          type: string
+          $ref: '#/components/schemas/Username'
         usernameSpecs:
           $ref: '#/components/schemas/Username-Specs'
         rating:
@@ -863,6 +993,13 @@ components:
             $ref: '#/components/schemas/Recording'
         permLevel:
           $ref: '#/components/schemas/Permission-Level'
+        playTime:
+          type: integer
+          description: 'Total amount of time the user has played for, measured in seconds.'
+        creationDate:
+          type: string
+          format: date-time
+          description: The date and time the user's account was created. Should be UTC
       required:
         - _id
         - pfp
@@ -876,23 +1013,16 @@ components:
         - activityOverview
         - recordedAudios
         - permLevel
+        - playTime
+        - creationDate
+    Username:
+      title: Username
+      type: string
+      description: The name of the user
+      minLength: 1
       examples:
-        - _id: kaJ73KMV78tIj3a92xmn83ikjla1
-          pfp:
-            - 0
-          username: John Doe
-          usernameSpecs: ''
-          rating: 0
-          totalQuestionsPlayed: 0
-          totalGames: 0
-          coins: 0
-          coinsCumulative: 0
-          activityOverview:
-            - id: string
-          recordedAudios:
-            - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
-              recType: normal
-          permLevel: normal
+        - John Doe
+        - Unknown
     Username-Specs:
       title: Username-Specs
       type: string
@@ -910,10 +1040,11 @@ components:
       type: string
       title: User-Id
       description: Firebase User ID
-      pattern: '^[A-Za-z0-9]{28}'
+      pattern: '^[A-Za-z0-9]+'
       examples:
         - kaJ73KMV78tIj3a92xmn83ikjla1
-      minLength: 28
+        - ''
+      minLength: 1
       maxLength: 28
     VTT:
       title: VTT
@@ -934,6 +1065,18 @@ components:
 
           00:01:01.123456 --> 00:01:02.123456
           <v Speaker 2>WORD4
+        - ''
+    Error-Msg-JSON:
+      title: Error-Msg-JSON
+      type: object
+      description: A JSON variant of an error message that includes both a human-readable and a machine-readable error message.
+      properties:
+        err:
+          type: string
+          description: A human-readable form of the error message
+        err_id:
+          type: string
+          description: A machine-readable form of the error message
   parameters:
     BlobPath:
       name: blob_path
@@ -950,6 +1093,10 @@ components:
       type: http
       scheme: bearer
       description: A Bearer token sent from Firebase
+    Internal-Auth:
+      type: http
+      scheme: basic
+      description: A custom token generated by the server itself to identify other backend components
 tags:
   - name: frontend
   - name: internal
