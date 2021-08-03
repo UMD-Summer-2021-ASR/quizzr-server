@@ -5,6 +5,7 @@ import random
 import sys
 from datetime import datetime
 from http import HTTPStatus
+from secrets import token_urlsafe
 
 import jsonschema.exceptions
 import pymongo.errors
@@ -117,6 +118,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         app_conf["PROC_CONFIG"],
         app_conf["SUBMISSION_FILE_TYPES"]
     )
+    socket_server_key = {}
     # TODO: multiprocessing
 
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
@@ -367,6 +369,25 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Retrieve a file from Firebase Storage."""
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
+    @app.post("/socket/key")
+    def generate_game_key():
+        """Generate a secret key to represent the socket server.
+
+        WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
+        if socket_server_key:
+            return {"err_id": "secret_key_exists",
+                    "err": "A secret key has already been generated."}, HTTPStatus.UNAUTHORIZED
+        key = token_urlsafe(256)
+        socket_server_key["value"] = key
+        return {"key": key}
+
+    @app.put("/game_results")
+    def handle_game_results():
+        """Update the database with the results of a game session."""
+        if request.headers.get("Authorization") != socket_server_key["value"]:
+            abort(HTTPStatus.UNAUTHORIZED)
+        return {"err": "This feature is not implemented yet.", "err_id": "not_implemented"}, HTTPStatus.NOT_FOUND
+
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
         """A resource to automatically point to the user's own profile."""
@@ -388,7 +409,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                 app.logger.error("User already registered. Aborting")
                 return "already_registered", HTTPStatus.BAD_REQUEST
             except UserExistsError as e:
-                app.logger.error(f"User already exists {e}. Aborting")
+                app.logger.error(f"User already exists: {e}. Aborting")
                 return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
             if result:
                 app.logger.info("User successfully created")
@@ -402,7 +423,13 @@ def create_app(test_overrides=None, test_inst_path=None):
             err = _validate_args(update_args, schema)
             if err:
                 return err
-            result = qtpm.modify_profile(user_id, update_args)
+
+            try:
+                result = qtpm.modify_profile(user_id, update_args)
+            except UserExistsError as e:
+                app.logger.error(f"User already exists: {e}. Aborting")
+                return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
+
             if result:
                 return "user_modified", HTTPStatus.OK
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR

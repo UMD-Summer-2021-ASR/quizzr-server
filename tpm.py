@@ -458,7 +458,6 @@ class QuizzrTPM:
         :raise pymongo.errors.DuplicateKeyError:
         """
         if self.users.find_one({"username": username}) is not None:
-            logging.error(f"User {username!r} already exists. Aborting")
             raise UserExistsError(username)
         profile_stub = self.api.get_schema_stub("User")
         profile_stub["_id"] = user_id
@@ -475,6 +474,9 @@ class QuizzrTPM:
         :param update_args: The fields to replace and their corresponding values
         :return: A pymongo UpdateResult object. See documentation for further details
         """
+        username = update_args.get("username")
+        if username and self.users.find_one({"username": username}) is not None:
+            raise UserExistsError(username)
         return self.users.update_one({"_id": user_id}, {"$set": update_args})
 
     def delete_profile(self, user_id):
