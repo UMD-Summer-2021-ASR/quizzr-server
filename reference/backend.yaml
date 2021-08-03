@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.3.0
+  version: 0.3.1
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
