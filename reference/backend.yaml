@@ -572,43 +572,80 @@ paths:
         - frontend
       responses:
         '200':
-          description: Question Found
+          description: OK
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  id:
-                    $ref: '#/components/schemas/Audio-Id'
-                  vtt:
-                    $ref: '#/components/schemas/VTT'
-                  qid:
-                    $ref: '#/components/schemas/Str-ObjectId'
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        qb_id:
+                          $ref: '#/components/schemas/QB-ID'
+                        audio:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              id:
+                                $ref: '#/components/schemas/Audio-Id'
+                              sentenceId:
+                                type: integer
+                              gentleVtt:
+                                $ref: '#/components/schemas/VTT'
+                              vtt:
+                                $ref: '#/components/schemas/VTT'
+                            required:
+                              - id
+                              - sentenceId
+                              - gentleVtt
+                              - vtt
+                      required:
+                        - qb_id
+                        - audio
                 required:
-                  - id
-                  - vtt
-                  - qid
+                  - results
               examples:
                 example-1:
                   value:
-                    id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
-                    vtt: |-
-                      WEBVTT Kind: captions; Language: en
+                    results:
+                      - qb_id: 0
+                        audio:
+                          - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
+                            sentenceId: 0
+                            gentleVtt: |-
+                              WEBVTT Kind: captions; Language: en
 
-                      00:00:00.012345 --> 00:00:01.123456
-                      <v Speaker 1>WORD1
+                              00:00:00.012345 --> 00:00:01.123456
+                              <v Speaker 1>WORD1
 
-                      00:00:01.123456 --> 00:00:02.123456
-                      <v Speaker 1>WORD2
+                              00:00:01.123456 --> 00:00:02.123456
+                              <v Speaker 1>WORD2
 
-                      00:01:00.012345 --> 00:01:01.123456
-                      <v Speaker 2>WORD3
+                              00:01:00.012345 --> 00:01:01.123456
+                              <v Speaker 2>WORD3
 
-                      00:01:01.123456 --> 00:01:02.123456
-                      <v Speaker 2>WORD4
-                    qid: 9174ea6cb092348d950a2f65
+                              00:01:01.123456 --> 00:01:02.123456
+                              <v Speaker 2>WORD4
+                            vtt: |-
+                              WEBVTT Kind: captions; Language: en
+
+                              00:00:00.012345 --> 00:00:01.123456
+                              <v Speaker 1>WORD1
+
+                              00:00:01.123456 --> 00:00:02.123456
+                              <v Speaker 1>WORD2
+
+                              00:01:00.012345 --> 00:01:01.123456
+                              <v Speaker 2>WORD3
+
+                              00:01:01.123456 --> 00:01:02.123456
+                              <v Speaker 2>WORD4
         '404':
-          description: Question Not Found
+          description: Not Found
         '500':
           description: Internal Server Error
           content:
@@ -627,8 +664,13 @@ paths:
                 required:
                   - err
       operationId: pick_game_question
-      description: 'Retrieve an audio file ID and its associated VTT from a recorded question, along with the ID of the question.'
-      parameters: []
+      description: Retrieve a batch of randomly-selected questions and attempt to retrieve the associated recordings with the best evaluations possible without getting recordings from different users in the same question.
+      parameters:
+        - schema:
+            type: integer
+          in: query
+          name: batchSize
+          description: The number of questions to sample. Default is 1.
       security:
         - Firebase-Auth: []
   /question/unrec:
@@ -716,6 +758,10 @@ paths:
                     type: object
                     additionalProperties: false
                     properties:
+                      qb_id:
+                        $ref: '#/components/schemas/QB-ID'
+                      sentenceId:
+                        type: integer
                       transcript:
                         type: string
                       answer:
@@ -724,6 +770,8 @@ paths:
                         type: integer
                         description: 'A value returned from the bag-of-words-test (see https://github.com/UMD-Summer-2021-ASR/bag-of-words-test).'
                     required:
+                      - qb_id
+                      - sentenceId
                       - transcript
                       - answer
                       - recDifficulty
@@ -733,7 +781,24 @@ paths:
               example-1:
                 value:
                   arguments:
-                    - transcript: 'This man ordered Thomas Larkin to buy him seventy square miles of land, leading him to acquire his Mariposa gold mine. He married Jessie, the daughter of Thomas Hart Benton, and, during the Civil War, he controversially confiscated slaveholder property while acting as the leader of (*) Missouri. Kit Carson served as the guide for the first two of his expeditions to survey the American West. For 10 points, name this explorer known as "the Pathfinder" who was also the first presidential candidate of the Republican Party.'
+                    - qb_id: 0
+                      sentenceId: 0
+                      transcript: 'This man ordered Thomas Larkin to buy him seventy square miles of land, leading him to acquire his Mariposa gold mine.'
+                      answer: John C. Fremont
+                      recDifficulty: 4
+                    - qb_id: 0
+                      sentenceId: 1
+                      transcript: 'He married Jessie, the daughter of Thomas Hart Benton, and, during the Civil War, he controversially confiscated slaveholder property while acting as the leader of (*) Missouri.'
+                      answer: John C. Fremont
+                      recDifficulty: 4
+                    - qb_id: 0
+                      sentenceId: 2
+                      transcript: Kit Carson served as the guide for the first two of his expeditions to survey the American West.
+                      answer: John C. Fremont
+                      recDifficulty: 4
+                    - qb_id: 0
+                      sentenceId: 3
+                      transcript: 'For 10 points, name this explorer known as "the Pathfinder" who was also the first presidential candidate of the Republican Party.'
                       answer: John C. Fremont
                       recDifficulty: 4
         description: A batch of unrecorded question documents.
@@ -1077,6 +1142,10 @@ components:
         err_id:
           type: string
           description: A machine-readable form of the error message
+    QB-ID:
+      title: QB-ID
+      type: integer
+      description: The ID of the question
   parameters:
     BlobPath:
       name: blob_path
