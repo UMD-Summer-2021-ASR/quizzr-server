@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import random
 import sys
 from datetime import datetime
 from http import HTTPStatus
@@ -463,41 +462,83 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     @app.route("/question", methods=["GET"])
     def pick_game_question():
-        """Find a random recorded question and return the VTT and ID of the recording with the best evaluation."""
-        cursor = qtpm.rec_questions.find({"qb_id": {"$exists": True}}, {"qb_id": 1})
-        question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
-        if not question_ids:
-            app.logger.error("No recorded questions found. Aborting")
-            return "rec_empty_qids", HTTPStatus.NOT_FOUND
-
-        # question_ids = qtpm.rec_question_ids.copy()
-        audios = []
-        while True:
-            next_question_id = random.choice(question_ids)
-            cursor = qtpm.rec_questions.find({"qb_id": next_question_id})
-            app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-
-            all_valid = True
-            for sentence in cursor:
-                if sentence and sentence.get("recordings"):
-                    app.logger.debug(f"sentence = {sentence!r}")
-                    audio = qtpm.find_best_audio_doc(
-                        sentence.get("recordings"),
-                        required_fields=["_id", "questionId", "sentenceId", "vtt", "gentleVtt"]
-                    )
-                    if not audio:
-                        all_valid = False
-                        break
-                    audios.append(audio)
-            if all_valid:
-                break
-            app.logger.warning(
-                f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
-            question_ids.remove(next_question_id)
-            if not question_ids:
-                app.logger.error("Failed to find a viable recorded question. Aborting")
-                return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        return {"results": audios}
+        """Retrieve a batch of randomly-selected questions and attempt to retrieve the associated recordings with the
+        best evaluations possible without getting recordings from different users in the same question. """
+        # cursor = qtpm.rec_questions.find({"qb_id": {"$exists": True}}, {"qb_id": 1})
+        # question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
+        # if not question_ids:
+        #     app.logger.error("No recorded questions found. Aborting")
+        #     return "rec_empty_qids", HTTPStatus.NOT_FOUND
+        #
+        # # question_ids = qtpm.rec_question_ids.copy()
+        # audios = []
+        # while True:
+        #     next_question_id = random.choice(question_ids)
+        #     cursor = qtpm.rec_questions.find({"qb_id": next_question_id})
+        #     app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
+        #
+        #     all_valid = True
+        #     for sentence in cursor:
+        #         if sentence and sentence.get("recordings"):
+        #             app.logger.debug(f"sentence = {sentence!r}")
+        #             audio = qtpm.find_best_audio_doc(
+        #                 sentence.get("recordings"),
+        #                 required_fields=["_id", "questionId", "sentenceId", "vtt", "gentleVtt"]
+        #             )
+        #             if not audio:
+        #                 all_valid = False
+        #                 break
+        #             audios.append(audio)
+        #     if all_valid:
+        #         break
+        #     app.logger.warning(
+        #         f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
+        #     question_ids.remove(next_question_id)
+        #     if not question_ids:
+        #         app.logger.error("Failed to find a viable recorded question. Aborting")
+        #         return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
+        # return {"results": audios}
+        batch_size = int(request.args.get("batchSize") or 1)
+        cursor = qtpm.rec_questions.aggregate([
+            {'$group': {'_id': '$qb_id'}},
+            {'$sample': {'size': batch_size}},
+            {'$lookup': {
+                'from': 'Audio',
+                'as': 'audio',
+                'let': {'qb_id': '$_id'},
+                'pipeline': [
+                    {'$match': {'$expr': {'$eq': ['$qb_id', '$$qb_id']}}},
+                    {'$set': {'totalScore': {'$add': ['$score.wer', '$score.mer', '$score.wil']}}},
+                    {'$sort': {'totalScore': 1}},
+                    {'$group': {
+                        '_id': {'userId': '$userId', 'sentenceId': '$sentenceId'},
+                        'id': {'$first': '$_id'},
+                        'vtt': {'$first': '$vtt'},
+                        'gentleVtt': {'$first': '$gentleVtt'},
+                        'lowestScore': {'$first': '$totalScore'}
+                    }},
+                    {'$group': {
+                        '_id': '$_id.userId',
+                        'netScore': {'$sum': '$lowestScore'},
+                        'audio': {'$push': {
+                            'id': '$id',
+                            'sentenceId': '$_id.sentenceId',
+                            'vtt': '$vtt',
+                            'gentleVtt': '$gentleVtt'
+                        }}
+                    }},
+                    {'$sort': {'netScore': 1}},
+                    {'$limit': 1},
+                    {'$unwind': {'path': '$audio'}},
+                    {'$replaceRoot': {'newRoot': '$audio'}}
+                ]
+            }}
+        ])
+        questions = []
+        for doc in cursor:
+            doc["qb_id"] = doc.pop("_id")
+            questions.append(doc)
+        return {"results": questions}
 
     @app.route("/question/unrec", methods=["GET", "POST"])
     def unrec_question_resource():
