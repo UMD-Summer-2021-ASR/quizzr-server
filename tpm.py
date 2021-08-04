@@ -111,8 +111,8 @@ class QuizzrTPM:
         logging.debug("Updating question...")
         if unrecorded:
             question["recordings"] = [rec_doc]
-            self.insert_rec_question(question)
-            self.delete_unrec_question({"_id": qid})
+            self.rec_questions.insert_one(question)
+            self.unrec_questions.delete_one({"_id": qid})
         else:
             results = self.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": rec_doc}})
             if results.matched_count == 0:
@@ -136,25 +136,26 @@ class QuizzrTPM:
             logging.warning(f"Could not update user with ID {user_id}")
             return "internal_error", "user_update_failure"
 
-    def add_recs_to_users(self, uid2rec_doc: Dict[str, dict]):
+    def add_recs_to_users(self, uid2rec_docs: Dict[str, List[dict]]):
         """
         Push multiple recording documents to the "recordedAudios" field of each user.
 
-        :param uid2rec_doc: A dictionary mapping a user ID to a recording document to append
+        :param uid2rec_docs: A dictionary mapping a user ID to the recording documents to append
         :return: An array of tuples each containing the type of error and the reason
         """
         update_batch = []
         errs = []
         logging.debug("Updating user information...")
-        for user_id, rec_doc in uid2rec_doc.items():
+        for user_id, rec_docs in uid2rec_docs.items():
             if user_id is None:
                 logging.warning("Parameter 'user_id' is undefined. Skipping update")
                 errs.append(("internal_error", "undefined_user_id"))
                 continue
-            update_batch.append(UpdateOne({"_id": user_id}, {"$push": {"recordedAudios": rec_doc}}))
+            for rec_doc in rec_docs:
+                update_batch.append(UpdateOne({"_id": user_id}, {"$push": {"recordedAudios": rec_doc}}))
         results = self.users.bulk_write(update_batch)
-        logging.info(f"Successfully updated {results.matched_count} of {len(uid2rec_doc)} user documents")
-        missed_results = len(uid2rec_doc) - results.matched_count
+        logging.info(f"Successfully updated {results.matched_count} of {len(uid2rec_docs)} user documents")
+        missed_results = len(uid2rec_docs) - results.matched_count
         # if missed_results == 1:
         #     errs.append(("internal_error", "user_update_failure"))
         # elif missed_results > 1:
@@ -372,24 +373,26 @@ class QuizzrTPM:
             self,
             sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
-            sub2vtt,
-            buzz_submissions):
+            sub2vtt):
         """Upload submission metadata to MongoDB."""
+        processing_list = ["normal"]
         unproc_audio_batch = []
         audio_batch = []
-        uid2rec_doc = {}
+        uid2rec_docs = {}
         for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
                 "version": self.app_config["VERSION"]
             }
-            if submission not in buzz_submissions:
-                entry["gentleVtt"] = sub2vtt[submission]
             metadata = sub2meta[submission]
             entry.update(metadata)
-            if submission in buzz_submissions:
+            if metadata["recType"] in processing_list:
+                entry["gentleVtt"] = sub2vtt[submission]
+            if metadata["recType"] not in processing_list:
                 audio_batch.append(entry)
-                uid2rec_doc[metadata["userId"]] = {"id": audio_id, "recType": metadata["recType"]}
+                if metadata["userId"] not in uid2rec_docs:
+                    uid2rec_docs[metadata["userId"]] = []
+                uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
             else:
                 unproc_audio_batch.append(entry)
 
@@ -409,7 +412,7 @@ class QuizzrTPM:
         else:
             proc_results = self.audio.insert_many(audio_batch)
             logging.info(f"Inserted {len(proc_results.inserted_ids)} document(s) into the Audio collection")
-            self.add_recs_to_users(uid2rec_doc)
+            self.add_recs_to_users(uid2rec_docs)
         return unproc_results, proc_results
 
     @staticmethod

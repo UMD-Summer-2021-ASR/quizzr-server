@@ -979,6 +979,7 @@ components:
       enum:
         - normal
         - buzz
+        - answer
       examples:
         - normal
         - ''

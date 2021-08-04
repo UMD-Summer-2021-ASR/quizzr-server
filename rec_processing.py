@@ -103,7 +103,15 @@ class QuizzrProcessor:
                     "case": "accepted",
                     "metadata": sub2meta[submission]
                 }
-            logging.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins.")
+            logging.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins")
+
+        if "answer" in typed_submissions:
+            for submission in typed_submissions["answer"]:
+                final_results[submission] = {
+                    "case": "accepted",
+                    "metadata": sub2meta[submission]
+                }
+            logging.info(f"Received {len(typed_submissions['answer'])} submission(s) for an answer to a question")
         return final_results
 
     def preprocess_submissions(self,
