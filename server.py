@@ -205,7 +205,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     def pre_screen(recording, question_id, user_id, diarization_metadata, rec_type):
         """Submit a recording for pre-screening and upload it to the database if it passes."""
-        valid_rec_types = ["normal", "buzz"]
+        valid_rec_types = ["normal", "buzz", "answer"]
 
         app.logger.debug(f"question_id = {question_id!r}")
         app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
@@ -275,23 +275,26 @@ def create_app(test_overrides=None, test_inst_path=None):
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
         # Upload files
-        normal_file_paths = []
-        buzz_file_paths = []
-        buzz_submissions = []
+        file_paths = {}
         for submission in results:
             file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
             if results[submission]["case"] == "accepted":
-                if results[submission]["metadata"]["recType"] == "buzz":
-                    buzz_file_paths.append(file_path)
-                    buzz_submissions.append(submission)
-                else:
-                    normal_file_paths.append(file_path)
+                sub_rec_type = results[submission]["metadata"]["recType"]
+                if sub_rec_type not in file_paths:
+                    file_paths[sub_rec_type] = []
+                file_paths[sub_rec_type].append(file_path)
+
+        app.logger.debug(f"file_paths = {file_paths}")
+
         try:
-            file2blob = qtpm.upload_many(normal_file_paths, "normal")
-            file2blob.update(qtpm.upload_many(buzz_file_paths, "buzz"))
+            file2blob = {}
+            for rt, paths in file_paths.items():
+                file2blob.update(qtpm.upload_many(paths, rt))
         except BrokenPipeError as e:
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+
+        app.logger.debug(f"file2blob = {file2blob}")
 
         # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
@@ -308,8 +311,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         qtpm.mongodb_insert_submissions(
             sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
             sub2meta=sub2meta,
-            sub2vtt=sub2vtt,
-            buzz_submissions=buzz_submissions
+            sub2vtt=sub2vtt
         )
 
         for submission in results:
@@ -538,7 +540,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         app.logger.debug(f"arguments_list = {arguments_list!r}")
 
         app.logger.info(f"Uploading {len(arguments_list)} unrecorded questions...")
-        qtpm.insert_unrec_questions(arguments_list)
+        qtpm.unrec_questions.insert_many(arguments_list)
         app.logger.info("Successfully uploaded questions")
         return {"msg": "unrec_question.upload_success"}
 
