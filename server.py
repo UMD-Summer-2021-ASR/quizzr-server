@@ -135,12 +135,33 @@ def create_app(test_overrides=None, test_inst_path=None):
             return get_unprocessed_audio()
         elif request.method == "POST":
             decoded = _verify_id_token()
-            recording = request.files.get("audio")
-            question_id = request.form.get("qid")
-            diarization_metadata = request.form.get("diarMetadata")
-            rec_type = request.form.get("recType")
             user_id = decoded['uid']
-            return pre_screen(recording, question_id, user_id, diarization_metadata, rec_type)
+
+            recordings = request.files.getlist("audio")
+            qb_ids = request.form.getlist("qb_id")
+            sentence_ids = request.form.getlist("sentenceId")
+            diarization_metadatas = request.form.getlist("diarMetadata")
+            rec_types = request.form.getlist("recType")
+
+            if not (len(recordings) == len(rec_types)
+                    and (not qb_ids or len(recordings) == len(qb_ids))
+                    and (not sentence_ids or len(recordings) == len(sentence_ids))
+                    and (not diarization_metadatas or len(recordings) == len(diarization_metadatas))):
+                app.logger.error("Received incomplete form batch")
+                return "incomplete_batch", HTTPStatus.BAD_REQUEST
+
+            results = []
+            for i in range(len(recordings)):
+                recording = recordings[i]
+                rec_type = rec_types[i]
+                qb_id = qb_ids[i] if len(qb_ids) > i else None
+                sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
+                diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
+                result = pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata)
+                if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
+                    return result
+                results.append(pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata))
+            return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
@@ -162,10 +183,10 @@ def create_app(test_overrides=None, test_inst_path=None):
         for audio_doc in audio_cursor:
             app.logger.debug(f"audio_doc = {audio_doc!r}")
 
-            qid = audio_doc.get("questionId")
+            qid = audio_doc.get("qb_id")
             if qid is None:
                 app.logger.warning("Audio document does not contain question ID")
-                errs.append(("internal_error", "undefined_question_id"))
+                errs.append(("internal_error", "undefined_qb_id"))
                 continue
             if qid not in qid2entries:
                 qid2entries[qid] = []
@@ -202,35 +223,30 @@ def create_app(test_overrides=None, test_inst_path=None):
             response["errors"] = [{"type": err[0], "reason": err[1]} for err in errs]
         return response
 
-    def pre_screen(recording, question_id, user_id, diarization_metadata, rec_type):
+    def pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata):
         """Submit a recording for pre-screening and upload it to the database if it passes."""
         valid_rec_types = ["normal", "buzz", "answer"]
 
-        app.logger.debug(f"question_id = {question_id!r}")
+        app.logger.debug(f"qb_id = {qb_id!r}")
+        app.logger.debug(f"sentence_id = {sentence_id!r}")
         app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
         app.logger.debug(f"rec_type = {rec_type!r}")
 
         if not recording:
             app.logger.error("No audio recording defined. Aborting")
-            return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
+            return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
 
         if not rec_type:
             app.logger.error("Form argument 'recType' is undefined. Aborting")
-            return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
+            return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
         elif rec_type not in valid_rec_types:
             app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
-            return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
-        qid_required = rec_type != "buzz"
-        qid_used = qid_required or rec_type != "buzz"  # Redundant but for flexibility
+            return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
 
-        question_id, success = error_handling.to_oid_soft(question_id)
-        if qid_used:
-            if qid_required and not question_id:
-                app.logger.error("Form argument 'qid' expected. Aborting")
-                return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
-            if not success:
-                app.logger.error("Form argument 'qid' is not a valid ObjectId. Aborting")
-                return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
+        qid_required = rec_type != "buzz"
+        if qid_required and not qb_id:
+            app.logger.error("Form argument 'qid' expected. Aborting")
+            return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
 
         # user_ids = QuizzrTPM.get_ids(qtpm.users)
         # if not user_ids:
@@ -254,8 +270,10 @@ def create_app(test_overrides=None, test_inst_path=None):
         }
         if diarization_metadata:
             metadata["diarMetadata"] = diarization_metadata
-        if question_id:
-            metadata["questionId"] = question_id
+        if qb_id:
+            metadata["qb_id"] = int(qb_id)
+        if sentence_id:
+            metadata["sentenceId"] = int(sentence_id)
 
         submission_name = _save_recording(rec_dir, recording, metadata)
         app.logger.debug(f"submission_name = {submission_name!r}")
@@ -271,7 +289,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             )
         except BrokenPipeError as e:
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+            return {"err": "broken_pipe_error"}, HTTPStatus.INTERNAL_SERVER_ERROR
 
         # Upload files
         file_paths = {}
@@ -283,7 +301,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                     file_paths[sub_rec_type] = []
                 file_paths[sub_rec_type].append(file_path)
 
-        app.logger.debug(f"file_paths = {file_paths}")
+        app.logger.debug(f"file_paths = {file_paths!r}")
 
         try:
             file2blob = {}
@@ -293,7 +311,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
-        app.logger.debug(f"file2blob = {file2blob}")
+        app.logger.debug(f"file2blob = {file2blob!r}")
 
         # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
@@ -320,7 +338,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
         if results[submission_name]["case"] == "err":
-            return results[submission_name]["err"], HTTPStatus.INTERNAL_SERVER_ERROR
+            return {"err": results[submission_name]["err"]}, HTTPStatus.INTERNAL_SERVER_ERROR
 
         return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
 
