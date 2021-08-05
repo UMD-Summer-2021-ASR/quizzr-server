@@ -265,10 +265,7 @@ paths:
                 qid:
                   $ref: '#/components/schemas/Str-ObjectId'
                 recType:
-                  type: string
-                  enum:
-                    - normal
-                    - buzz
+                  $ref: '#/components/schemas/Rec-Type'
                 diarMetadata:
                   type: string
               required:
