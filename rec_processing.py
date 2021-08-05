@@ -133,30 +133,37 @@ class QuizzrProcessor:
                 results[submission]["err"] = "meta_not_found"
                 continue
             qid = sub2meta[submission].get("qb_id")
+            logging.debug(f"{type(qid)} qid = {qid!r}")
+
             if qid is None:
                 logging.error(f"Question ID for submission {submission} not found. Skipping")
                 results[submission]["err"] = "qid_not_found"
                 continue
+
+            query = {"qb_id": qid}
+
             sid = sub2meta[submission].get("sentenceId")
+            logging.debug(f"{type(sid)} sid = {sid!r}")
             if sid is None:
+                # logging.warning(f"Sentence ID for submission {submission} not found. Continuing without sentence ID")
                 logging.error(f"Sentence ID for submission {submission} not found. Skipping")
                 results[submission]["err"] = "sid_not_found"
                 continue
+            else:
+                query["sentenceId"] = sid
 
-            logging.debug(f"{type(qid)} qid = {qid!r}")
-            logging.debug(f"{type(sid)} sid = {sid!r}")
-            logging.debug("Finding sentence in UnrecordedQuestions...")
-            sentence = self.unrec_questions.find_one({"qb_id": qid, "sentenceId": sid}, {"transcript": 1})
-            if sentence is None:
-                logging.debug("Sentence not found in UnrecordedQuestions. Searching in RecordedQuestions...")
-                sentence = self.rec_questions.find_one({"qb_id": qid, "sentenceId": sid}, {"transcript": 1})
+            logging.debug("Finding question in UnrecordedQuestions...")
+            question = self.unrec_questions.find_one(query, {"transcript": 1})
+            if question is None:
+                logging.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
+                question = self.rec_questions.find_one(query, {"transcript": 1})
 
-            if sentence is None:
-                logging.error("Sentence not found. Skipping submission")
+            if question is None:
+                logging.error("Question not found. Skipping submission")
                 results[submission]["err"] = "sentence_not_found"
                 continue
 
-            r_transcript = sentence.get("transcript")
+            r_transcript = question.get("transcript")
 
             if r_transcript is None:
                 logging.error("Transcript not found. Skipping submission")

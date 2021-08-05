@@ -150,18 +150,20 @@ def create_app(test_overrides=None, test_inst_path=None):
                 app.logger.error("Received incomplete form batch")
                 return "incomplete_batch", HTTPStatus.BAD_REQUEST
 
-            results = []
-            for i in range(len(recordings)):
-                recording = recordings[i]
-                rec_type = rec_types[i]
-                qb_id = qb_ids[i] if len(qb_ids) > i else None
-                sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
-                diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
-                result = pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata)
-                if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
-                    return result
-                results.append(pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata))
-            return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+            # for i in range(len(recordings)):
+            #     recording = recordings[i]
+            #     rec_type = rec_types[i]
+            #     qb_id = qb_ids[i] if len(qb_ids) > i else None
+            #     sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
+            #     diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
+            #     result = pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata)
+            #
+            #     # Stops pre-screening on the first submission that fails. Meant to represent an all-or-nothing logic
+            #     # flow, but it isn't really successful.
+            #     if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
+            #         return result
+            # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+            return pre_screen(recordings, rec_types, qb_ids, sentence_ids, user_id, diarization_metadatas)
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
@@ -223,60 +225,71 @@ def create_app(test_overrides=None, test_inst_path=None):
             response["errors"] = [{"type": err[0], "reason": err[1]} for err in errs]
         return response
 
-    def pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata):
-        """Submit a recording for pre-screening and upload it to the database if it passes."""
+    def pre_screen(recordings, rec_types, qb_ids, sentence_ids, user_id, diarization_metadatas):
+        """Submit a batch of recordings for pre-screening and upload them to the database if they all pass."""
         valid_rec_types = ["normal", "buzz", "answer"]
 
-        app.logger.debug(f"qb_id = {qb_id!r}")
-        app.logger.debug(f"sentence_id = {sentence_id!r}")
-        app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
-        app.logger.debug(f"rec_type = {rec_type!r}")
+        submission_names = []
 
-        if not recording:
-            app.logger.error("No audio recording defined. Aborting")
-            return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
+        for i in range(len(recordings)):
+            recording = recordings[i]
+            rec_type = rec_types[i]
+            qb_id = qb_ids[i] if len(qb_ids) > i else None
+            sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
+            diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
 
-        if not rec_type:
-            app.logger.error("Form argument 'recType' is undefined. Aborting")
-            return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
-        elif rec_type not in valid_rec_types:
-            app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
-            return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
+            app.logger.debug(f"qb_id = {qb_id!r}")
+            app.logger.debug(f"sentence_id = {sentence_id!r}")
+            app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
+            app.logger.debug(f"rec_type = {rec_type!r}")
 
-        qid_required = rec_type != "buzz"
-        if qid_required and not qb_id:
-            app.logger.error("Form argument 'qid' expected. Aborting")
-            return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
+            if not recording:
+                app.logger.error("No audio recording defined. Aborting")
+                return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
 
-        # user_ids = QuizzrTPM.get_ids(qtpm.users)
-        # if not user_ids:
-        #     app.logger.error("No user IDs found. Aborting")
-        #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
-        # user_ids = qtpm.user_ids.copy()
-        # while True:
-        #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
-        #     if success:
-        #         break
-        #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
-        #     user_ids.remove(user_id)
-        #     if not user_ids:
-        #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
-        #         break
-        app.logger.debug(f"user_id = {user_id!r}")
+            if not rec_type:
+                app.logger.error("Form argument 'recType' is undefined. Aborting")
+                return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
+            elif rec_type not in valid_rec_types:
+                app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
+                return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
 
-        metadata = {
-            "recType": rec_type,
-            "userId": user_id
-        }
-        if diarization_metadata:
-            metadata["diarMetadata"] = diarization_metadata
-        if qb_id:
-            metadata["qb_id"] = int(qb_id)
-        if sentence_id:
-            metadata["sentenceId"] = int(sentence_id)
+            qid_required = rec_type != "buzz"
+            if qid_required and not qb_id:
+                app.logger.error("Form argument 'qid' expected. Aborting")
+                return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
 
-        submission_name = _save_recording(rec_dir, recording, metadata)
-        app.logger.debug(f"submission_name = {submission_name!r}")
+            # user_ids = QuizzrTPM.get_ids(qtpm.users)
+            # if not user_ids:
+            #     app.logger.error("No user IDs found. Aborting")
+            #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
+            # user_ids = qtpm.user_ids.copy()
+            # while True:
+            #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
+            #     if success:
+            #         break
+            #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
+            #     user_ids.remove(user_id)
+            #     if not user_ids:
+            #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
+            #         break
+            app.logger.debug(f"user_id = {user_id!r}")
+
+            metadata = {
+                "recType": rec_type,
+                "userId": user_id
+            }
+            if diarization_metadata:
+                metadata["diarMetadata"] = diarization_metadata
+            if qb_id:
+                metadata["qb_id"] = int(qb_id)
+            if sentence_id:
+                metadata["sentenceId"] = int(sentence_id)
+
+            submission_name = _save_recording(rec_dir, recording, metadata)
+            app.logger.debug(f"submission_name = {submission_name!r}")
+
+            submission_names.append(submission_name)
         try:
             # accepted_submissions, errors = qp.pick_submissions(
             #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
@@ -334,13 +347,131 @@ def create_app(test_overrides=None, test_inst_path=None):
         for submission in results:
             rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
 
-        if results[submission_name]["case"] == "accepted":
-            return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+        for submission_name in submission_names:
+            if results[submission_name]["case"] == "rejected":
+                return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
+
+            if results[submission_name]["case"] == "err":
+                return {"err": results[submission_name]["err"]}, HTTPStatus.INTERNAL_SERVER_ERROR
+
+        return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+
+    def pre_screen_single(recording, rec_type, qb_id, user_id, diarization_metadata):
+        """Submit a recording for pre-screening and upload it to the database if it passes."""
+        valid_rec_types = ["normal", "buzz", "answer"]
+
+        app.logger.debug(f"qb_id = {qb_id!r}")
+        app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
+        app.logger.debug(f"rec_type = {rec_type!r}")
+
+        if not recording:
+            app.logger.error("No audio recording defined. Aborting")
+            return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
+
+        if not rec_type:
+            app.logger.error("Form argument 'recType' is undefined. Aborting")
+            return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
+        elif rec_type not in valid_rec_types:
+            app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
+            return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
+
+        qid_required = rec_type != "buzz"
+        if qid_required and not qb_id:
+            app.logger.error("Form argument 'qid' expected. Aborting")
+            return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
+
+        # user_ids = QuizzrTPM.get_ids(qtpm.users)
+        # if not user_ids:
+        #     app.logger.error("No user IDs found. Aborting")
+        #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
+        # user_ids = qtpm.user_ids.copy()
+        # while True:
+        #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
+        #     if success:
+        #         break
+        #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
+        #     user_ids.remove(user_id)
+        #     if not user_ids:
+        #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
+        #         break
+        app.logger.debug(f"user_id = {user_id!r}")
+
+        metadata = {
+            "recType": rec_type,
+            "userId": user_id
+        }
+        if diarization_metadata:
+            metadata["diarMetadata"] = diarization_metadata
+        if qb_id:
+            metadata["qb_id"] = int(qb_id)
+
+        submission_name = _save_recording(rec_dir, recording, metadata)
+        app.logger.debug(f"submission_name = {submission_name!r}")
+
+        try:
+            # accepted_submissions, errors = qp.pick_submissions(
+            #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
+            # )
+            results = qp.pick_submissions(
+                rec_processing.QuizzrWatcher.queue_submissions(
+                    app.config["REC_DIR"],
+                    size_limit=app.config["PROC_CONFIG"]["queueLimit"]
+                )
+            )
+        except BrokenPipeError as e:
+            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
+            return {"err": "broken_pipe_error"}, HTTPStatus.INTERNAL_SERVER_ERROR
+
+        # Upload files
+        file_paths = {}
+        for submission in results:
+            file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
+            if results[submission]["case"] == "accepted":
+                sub_rec_type = results[submission]["metadata"]["recType"]
+                if sub_rec_type not in file_paths:
+                    file_paths[sub_rec_type] = []
+                file_paths[sub_rec_type].append(file_path)
+
+        app.logger.debug(f"file_paths = {file_paths!r}")
+
+        try:
+            file2blob = {}
+            for rt, paths in file_paths.items():
+                file2blob.update(qtpm.upload_many(paths, rt))
+        except BrokenPipeError as e:
+            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
+            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+
+        app.logger.debug(f"file2blob = {file2blob!r}")
+
+        # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
+        sub2meta = {}
+        sub2vtt = {}
+
+        for submission in results:
+            doc = results[submission]
+            if doc["case"] == "accepted":
+                sub2meta[submission] = doc["metadata"]
+                if "vtt" in doc:
+                    sub2vtt[submission] = doc.get("vtt")
+
+        # Insert submissions
+        qtpm.mongodb_insert_submissions(
+            sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
+            sub2meta=sub2meta,
+            sub2vtt=sub2vtt
+        )
+
+        for submission in results:
+            rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
+
+        if results[submission_name]["case"] == "rejected":
+            return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
 
         if results[submission_name]["case"] == "err":
             return {"err": results[submission_name]["err"]}, HTTPStatus.INTERNAL_SERVER_ERROR
 
-        return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
+        return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
     def handle_processing_results(arguments_batch):
         """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
