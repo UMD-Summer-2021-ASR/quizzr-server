@@ -145,10 +145,10 @@ class QuizzrProcessor:
             sid = sub2meta[submission].get("sentenceId")
             logging.debug(f"{type(sid)} sid = {sid!r}")
             if sid is None:
-                # logging.warning(f"Sentence ID for submission {submission} not found. Continuing without sentence ID")
-                logging.error(f"Sentence ID for submission {submission} not found. Skipping")
-                results[submission]["err"] = "sid_not_found"
-                continue
+                logging.debug(f"Sentence ID for submission {submission} not found. Continuing without sentence ID")
+                # logging.error(f"Sentence ID for submission {submission} not found. Skipping")
+                # results[submission]["err"] = "sid_not_found"
+                # continue
             else:
                 query["sentenceId"] = sid
 

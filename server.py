@@ -181,43 +181,48 @@ def create_app(test_overrides=None, test_inst_path=None):
             app.logger.error("Could not find any audio documents")
             return "empty_unproc_audio", HTTPStatus.NOT_FOUND
         audio_cursor = qtpm.unproc_audio.find(limit=max_docs)
-        qid2entries = {}
+        id2entries = {}
+        qids = []
         for audio_doc in audio_cursor:
             app.logger.debug(f"audio_doc = {audio_doc!r}")
 
             qid = audio_doc.get("qb_id")
+            sentence_id = audio_doc.get("sentenceId")
             if qid is None:
                 app.logger.warning("Audio document does not contain question ID")
                 errs.append(("internal_error", "undefined_qb_id"))
                 continue
-            if qid not in qid2entries:
-                qid2entries[qid] = []
+            id_key = "_".join([str(qid), str(sentence_id)]) if sentence_id else str(qid)
+            if id_key not in id2entries:
+                id2entries[id_key] = []
             entry = {}
             for field in results_projection:
                 if field in audio_doc:
                     entry[field] = audio_doc[field]
-            qid2entries[qid].append(entry)
+            id2entries[id_key].append(entry)
+            qids.append(qid)
 
-        qids = list(qid2entries.keys())
-        app.logger.debug(f"qid2entries = {qid2entries!r}")
+        app.logger.debug(f"id2entries = {id2entries!r}")
         app.logger.info(f"Found {audio_doc_count} unprocessed audio document(s)")
         if not qids:
             app.logger.error("No audio documents contain question IDs")
             return "empty_qid2entries", HTTPStatus.NOT_FOUND
 
-        questions = qtpm.find_questions(qids)
-        for question in questions:
-            qid = question["_id"]
+        question_gen = qtpm.find_questions(qids)
+        for question in question_gen:
+            qid = question["qb_id"]
+            sentence_id = question.get("sentenceId")
+            id_key = "_".join([str(qid), str(sentence_id)]) if sentence_id else str(qid)
             transcript = question.get("transcript")
             if transcript:
-                entries = qid2entries[qid]
+                entries = id2entries[id_key]
                 for entry in entries:
                     entry["transcript"] = transcript
 
-        app.logger.debug(f"qid2entries = {qid2entries!r}")
+        app.logger.debug(f"id2entries = {id2entries!r}")
 
         results = []
-        for entries in qid2entries.values():
+        for entries in id2entries.values():
             results += entries
         app.logger.debug(f"Final Results: {results!r}")
         response = {"results": results}
@@ -356,123 +361,6 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
-    def pre_screen_single(recording, rec_type, qb_id, user_id, diarization_metadata):
-        """Submit a recording for pre-screening and upload it to the database if it passes."""
-        valid_rec_types = ["normal", "buzz", "answer"]
-
-        app.logger.debug(f"qb_id = {qb_id!r}")
-        app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
-        app.logger.debug(f"rec_type = {rec_type!r}")
-
-        if not recording:
-            app.logger.error("No audio recording defined. Aborting")
-            return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
-
-        if not rec_type:
-            app.logger.error("Form argument 'recType' is undefined. Aborting")
-            return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
-        elif rec_type not in valid_rec_types:
-            app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
-            return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
-
-        qid_required = rec_type != "buzz"
-        if qid_required and not qb_id:
-            app.logger.error("Form argument 'qid' expected. Aborting")
-            return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
-
-        # user_ids = QuizzrTPM.get_ids(qtpm.users)
-        # if not user_ids:
-        #     app.logger.error("No user IDs found. Aborting")
-        #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
-        # user_ids = qtpm.user_ids.copy()
-        # while True:
-        #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
-        #     if success:
-        #         break
-        #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
-        #     user_ids.remove(user_id)
-        #     if not user_ids:
-        #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
-        #         break
-        app.logger.debug(f"user_id = {user_id!r}")
-
-        metadata = {
-            "recType": rec_type,
-            "userId": user_id
-        }
-        if diarization_metadata:
-            metadata["diarMetadata"] = diarization_metadata
-        if qb_id:
-            metadata["qb_id"] = int(qb_id)
-
-        submission_name = _save_recording(rec_dir, recording, metadata)
-        app.logger.debug(f"submission_name = {submission_name!r}")
-
-        try:
-            # accepted_submissions, errors = qp.pick_submissions(
-            #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
-            # )
-            results = qp.pick_submissions(
-                rec_processing.QuizzrWatcher.queue_submissions(
-                    app.config["REC_DIR"],
-                    size_limit=app.config["PROC_CONFIG"]["queueLimit"]
-                )
-            )
-        except BrokenPipeError as e:
-            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return {"err": "broken_pipe_error"}, HTTPStatus.INTERNAL_SERVER_ERROR
-
-        # Upload files
-        file_paths = {}
-        for submission in results:
-            file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
-            if results[submission]["case"] == "accepted":
-                sub_rec_type = results[submission]["metadata"]["recType"]
-                if sub_rec_type not in file_paths:
-                    file_paths[sub_rec_type] = []
-                file_paths[sub_rec_type].append(file_path)
-
-        app.logger.debug(f"file_paths = {file_paths!r}")
-
-        try:
-            file2blob = {}
-            for rt, paths in file_paths.items():
-                file2blob.update(qtpm.upload_many(paths, rt))
-        except BrokenPipeError as e:
-            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
-
-        app.logger.debug(f"file2blob = {file2blob!r}")
-
-        # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
-        sub2meta = {}
-        sub2vtt = {}
-
-        for submission in results:
-            doc = results[submission]
-            if doc["case"] == "accepted":
-                sub2meta[submission] = doc["metadata"]
-                if "vtt" in doc:
-                    sub2vtt[submission] = doc.get("vtt")
-
-        # Insert submissions
-        qtpm.mongodb_insert_submissions(
-            sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
-            sub2meta=sub2meta,
-            sub2vtt=sub2vtt
-        )
-
-        for submission in results:
-            rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
-
-        if results[submission_name]["case"] == "rejected":
-            return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
-
-        if results[submission_name]["case"] == "err":
-            return {"err": results[submission_name]["err"]}, HTTPStatus.INTERNAL_SERVER_ERROR
-
-        return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
-
     def handle_processing_results(arguments_batch):
         """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
         Additionally, update the recording history of the associated questions and users."""
@@ -547,10 +435,14 @@ def create_app(test_overrides=None, test_inst_path=None):
         # decoded = {"uid": "dev"}
         user_id = decoded["uid"]
         if request.method == "GET":
-            return qtpm.get_profile(user_id, "private")
+            result = qtpm.get_profile(user_id, "private")
+            if result is None:
+                app.logger.error(f"User with ID '{user_id}' does not have a profile. Aborting")
+                abort(HTTPStatus.NOT_FOUND)
+            return result
         elif request.method == "POST":
             args = request.get_json()
-            path, op = api.path_for("modify_profile")
+            path, op = api.path_for("create_profile")
             schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
             err = _validate_args(args, schema)
             if err:
@@ -720,12 +612,15 @@ def create_app(test_overrides=None, test_inst_path=None):
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
         next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
-                                                            ["transcript", "sentenceId"], batch_size)
+                                                            ["transcript"], batch_size)
         if next_questions is None:
             return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
         results = []
         for doc in next_questions:
-            results.append({"id": doc["qb_id"], "sentenceId": doc["sentenceId"], "transcript": doc["transcript"]})
+            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
+            if "sentenceId" in doc:
+                result_doc["sentenceId"] = doc["sentenceId"]
+            results.append(result_doc)
         return {"results": results, "errors": errors}
 
     def upload_questions(arguments_batch):
@@ -787,6 +682,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Try to decode the token if provided. If in a production environment, forbid access when the decode fails.
         This function is only callable in the context of a view function."""
         # return {"uid": app.config["DEV_UID"]}
+        app.logger.info("Retrieving ID token from header 'Authorization'...")
         id_token = request.headers.get("Authorization")
 
         id_token_log = _get_private_data_string(id_token)
@@ -797,8 +693,10 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         if not id_token:
             if app.config["Q_ENV"] == PROD_ENV_NAME:
+                app.logger.error("ID token not found. Aborting")
                 abort(HTTPStatus.UNAUTHORIZED)
             else:
+                app.logger.warning(f"ID token not found. Authenticated user with default ID {app.config['DEV_UID']}")
                 return {"uid": app.config["DEV_UID"]}
 
         # Cut off prefix if it is present
@@ -807,12 +705,14 @@ def create_app(test_overrides=None, test_inst_path=None):
             id_token = id_token[len(prefix):]
 
         try:
+            app.logger.info("Decoding token...")
             decoded = auth.verify_id_token(id_token)
         except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError) as e:
-            logger.debug(repr(e))
+            app.logger.error(f"ID token error encountered: {e!r}. Aborting")
             decoded = None
             abort(HTTPStatus.UNAUTHORIZED)
         except auth.CertificateFetchError:
+            app.logger.error("Could not fetch certificate. Aborting")
             decoded = None
             abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 

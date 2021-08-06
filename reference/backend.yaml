@@ -597,7 +597,6 @@ paths:
                                 $ref: '#/components/schemas/VTT'
                             required:
                               - id
-                              - sentenceId
                               - gentleVtt
                               - vtt
                       required:
@@ -768,7 +767,6 @@ paths:
                         description: 'A value returned from the bag-of-words-test (see https://github.com/UMD-Summer-2021-ASR/bag-of-words-test).'
                     required:
                       - qb_id
-                      - sentenceId
                       - transcript
                       - answer
                       - recDifficulty
