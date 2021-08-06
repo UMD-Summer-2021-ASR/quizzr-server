@@ -59,18 +59,18 @@ class QuizzrTPM:
         errs = []
         logging.debug(f"arguments = {arguments!r}")
         logging.debug("Retrieving arguments...")
-        gfile_id = arguments.get("_id")
-        logging.debug(f"{type(gfile_id)} _id = {gfile_id!r}")
-        if gfile_id is None:
+        blob_name = arguments.get("_id")
+        logging.debug(f"{type(blob_name)} blob_name = {blob_name!r}")
+        if blob_name is None:
             logging.warning("File ID not specified in arguments. Skipping")
-            errs.append(("bad_args", "undefined_gfile_id"))
+            errs.append(("bad_args", "undefined_blob_name"))
             return errs
 
-        audio_doc = self.unproc_audio.find_one({"_id": gfile_id})
+        audio_doc = self.unproc_audio.find_one({"_id": blob_name})
         logging.debug(f"audio_doc = {audio_doc!r}")
         if audio_doc is None:
             logging.warning("Could not find audio document. Skipping")
-            errs.append(("bad_args", "invalid_gfile_id"))
+            errs.append(("bad_args", "invalid_blob_name"))
             return errs
 
         logging.debug("Updating audio document with results from processing...")
@@ -79,12 +79,13 @@ class QuizzrTPM:
         logging.debug(f"proc_audio_entry = {proc_audio_entry!r}")
 
         self.audio.insert_one(proc_audio_entry)
-        self.unproc_audio.delete_one({"_id": gfile_id})
+        self.unproc_audio.delete_one({"_id": blob_name})
 
         rec_doc = {"id": audio_doc["_id"], "recType": audio_doc["recType"]}
-        qid = audio_doc.get("questionId")
+        qid = audio_doc.get("qb_id")
+        sid = audio_doc.get("sentenceId")
 
-        err = self.add_rec_to_question(qid, rec_doc)
+        err = self.add_rec_to_question(qid, sid, rec_doc)
         if err:
             errs.append(err)
 
@@ -95,12 +96,17 @@ class QuizzrTPM:
 
         return errs
 
-    def add_rec_to_question(self, qid, rec_doc):
+    def add_rec_to_question(self, qid, sid, rec_doc):
         if qid is None:
             logging.warning("Missing question ID. Skipping")
             return "internal_error", "undefined_question_id"
+        query = {"qb_id": qid}
+
+        if sid is not None:
+            query["sentenceId"] = sid
+
         logging.debug("Retrieving question from unrecorded collection...")
-        question = self.unrec_questions.find_one({"_id": qid})
+        question = self.unrec_questions.find_one(query)
         logging.debug(f"question = {question!r}")
         unrecorded = question is not None
         if unrecorded:
@@ -112,9 +118,9 @@ class QuizzrTPM:
         if unrecorded:
             question["recordings"] = [rec_doc]
             self.rec_questions.insert_one(question)
-            self.unrec_questions.delete_one({"_id": qid})
+            self.unrec_questions.delete_one(query)
         else:
-            results = self.rec_questions.update_one({"_id": qid}, {"$push": {"recordings": rec_doc}})
+            results = self.rec_questions.update_one(query, {"$push": {"recordings": rec_doc}})
             if results.matched_count == 0:
                 logging.warning(f"Could not update question with ID {qid}")
                 return "internal_error", "question_update_failure"
@@ -211,14 +217,14 @@ class QuizzrTPM:
         if qids:
             if "filter" not in kwargs_c:
                 kwargs_c["filter"] = {}
-            kwargs_c["filter"]["_id"] = {"$in": qids}
+            kwargs_c["filter"]["qb_id"] = {"$in": qids}
 
         logging.info("Finding unrecorded questions...")
         unrec_cursor = self.unrec_questions.find(**kwargs_c)
         found_unrec_qids = []
         for i, question in enumerate(unrec_cursor):
             logging.debug(f"question {i} = {question!r}")
-            found_unrec_qids.append(question["_id"])
+            found_unrec_qids.append(question["qb_id"])
             yield question
         logging.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
 
@@ -227,7 +233,7 @@ class QuizzrTPM:
             if not rec_qids:
                 logging.info("Found all questions. Skipping finding recorded questions")
                 return
-            kwargs_c["filter"]["_id"] = {"$in": rec_qids}
+            kwargs_c["filter"]["qb_id"] = {"$in": rec_qids}
             logging.info(f"Finding {len(rec_qids)} of {len(qids)} recorded question(s)...")
         else:
             logging.info("Finding recorded questions...")
@@ -251,11 +257,11 @@ class QuizzrTPM:
             question_ids.remove(next_question_id)
         logging.error("Failed to find a viable unrecorded question. Aborting")
 
-    def pick_random_questions(self, question_ids, batch_size):
+    def pick_random_questions(self, collection_name, question_ids, required_fields, batch_size=1):
         qids_pool = question_ids.copy()
         random.shuffle(qids_pool)
         next_batch_size = batch_size
-        questions = []
+        sentences = []
         errors = []
         while qids_pool:
             if len(qids_pool) >= next_batch_size:
@@ -266,24 +272,30 @@ class QuizzrTPM:
                 qids_pool = []
             logging.debug(f"next_id_batch = {next_id_batch!r}")
             logging.debug(f"qids_pool = {qids_pool!r}")
-            questions_cursor = self.unrec_questions.find({"_id": {"$in": next_id_batch}})
+            questions_cursor = self.database.get_collection(collection_name).find({"qb_id": {"$in": next_id_batch}})
+            found = set()
             for doc in questions_cursor:
                 logging.debug(f"doc = {doc!r}")
-                if "transcript" in doc:
-                    questions.append(doc)
-                else:
-                    logging.warning("Question does not contain required field 'transcript'. Ignoring")
-                    errors.append((doc, "missing_transcript"))
-            next_batch_size -= len(questions)
+                valid_doc = True
+                for field in required_fields:
+                    if field not in doc:
+                        valid_doc = False
+                        logging.warning(f"Question does not contain required field '{field}'. Ignoring")
+                        errors.append((repr(doc["_id"]), f"missing_{field}"))
+                        break
+                if valid_doc:
+                    sentences.append(doc)
+                    found.add(doc["qb_id"])
+            next_batch_size -= len(found)
             if next_batch_size == 0:
                 logging.info("Found all questions requested. Returning results")
-                return questions, errors
-            logging.info(f"Found {len(questions)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
+                return sentences, errors
+            logging.info(f"Found {len(found)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
         if not qids_pool:
             logging.info("Could not find any more valid questions. Returning results")
-        if questions:
-            return questions, errors
-        logging.error("Failed to find any viable unrecorded questions. Aborting")
+        if sentences:
+            return sentences, errors
+        logging.error("Failed to find any viable questions. Aborting")
 
     # Utility methods for automatically updating the cached ID list.
     def insert_unrec_question(self, *args, **kwargs):

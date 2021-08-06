@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import random
 import sys
 from datetime import datetime
 from http import HTTPStatus
@@ -136,12 +135,35 @@ def create_app(test_overrides=None, test_inst_path=None):
             return get_unprocessed_audio()
         elif request.method == "POST":
             decoded = _verify_id_token()
-            recording = request.files.get("audio")
-            question_id = request.form.get("qid")
-            diarization_metadata = request.form.get("diarMetadata")
-            rec_type = request.form.get("recType")
             user_id = decoded['uid']
-            return pre_screen(recording, question_id, user_id, diarization_metadata, rec_type)
+
+            recordings = request.files.getlist("audio")
+            qb_ids = request.form.getlist("qb_id")
+            sentence_ids = request.form.getlist("sentenceId")
+            diarization_metadatas = request.form.getlist("diarMetadata")
+            rec_types = request.form.getlist("recType")
+
+            if not (len(recordings) == len(rec_types)
+                    and (not qb_ids or len(recordings) == len(qb_ids))
+                    and (not sentence_ids or len(recordings) == len(sentence_ids))
+                    and (not diarization_metadatas or len(recordings) == len(diarization_metadatas))):
+                app.logger.error("Received incomplete form batch")
+                return "incomplete_batch", HTTPStatus.BAD_REQUEST
+
+            # for i in range(len(recordings)):
+            #     recording = recordings[i]
+            #     rec_type = rec_types[i]
+            #     qb_id = qb_ids[i] if len(qb_ids) > i else None
+            #     sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
+            #     diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
+            #     result = pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata)
+            #
+            #     # Stops pre-screening on the first submission that fails. Meant to represent an all-or-nothing logic
+            #     # flow, but it isn't really successful.
+            #     if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
+            #         return result
+            # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+            return pre_screen(recordings, rec_types, qb_ids, sentence_ids, user_id, diarization_metadatas)
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
@@ -159,43 +181,48 @@ def create_app(test_overrides=None, test_inst_path=None):
             app.logger.error("Could not find any audio documents")
             return "empty_unproc_audio", HTTPStatus.NOT_FOUND
         audio_cursor = qtpm.unproc_audio.find(limit=max_docs)
-        qid2entries = {}
+        id2entries = {}
+        qids = []
         for audio_doc in audio_cursor:
             app.logger.debug(f"audio_doc = {audio_doc!r}")
 
-            qid = audio_doc.get("questionId")
+            qid = audio_doc.get("qb_id")
+            sentence_id = audio_doc.get("sentenceId")
             if qid is None:
                 app.logger.warning("Audio document does not contain question ID")
-                errs.append(("internal_error", "undefined_question_id"))
+                errs.append(("internal_error", "undefined_qb_id"))
                 continue
-            if qid not in qid2entries:
-                qid2entries[qid] = []
+            id_key = "_".join([str(qid), str(sentence_id)]) if sentence_id else str(qid)
+            if id_key not in id2entries:
+                id2entries[id_key] = []
             entry = {}
             for field in results_projection:
                 if field in audio_doc:
                     entry[field] = audio_doc[field]
-            qid2entries[qid].append(entry)
+            id2entries[id_key].append(entry)
+            qids.append(qid)
 
-        qids = list(qid2entries.keys())
-        app.logger.debug(f"qid2entries = {qid2entries!r}")
+        app.logger.debug(f"id2entries = {id2entries!r}")
         app.logger.info(f"Found {audio_doc_count} unprocessed audio document(s)")
         if not qids:
             app.logger.error("No audio documents contain question IDs")
             return "empty_qid2entries", HTTPStatus.NOT_FOUND
 
-        questions = qtpm.find_questions(qids)
-        for question in questions:
-            qid = question["_id"]
+        question_gen = qtpm.find_questions(qids)
+        for question in question_gen:
+            qid = question["qb_id"]
+            sentence_id = question.get("sentenceId")
+            id_key = "_".join([str(qid), str(sentence_id)]) if sentence_id else str(qid)
             transcript = question.get("transcript")
             if transcript:
-                entries = qid2entries[qid]
+                entries = id2entries[id_key]
                 for entry in entries:
                     entry["transcript"] = transcript
 
-        app.logger.debug(f"qid2entries = {qid2entries!r}")
+        app.logger.debug(f"id2entries = {id2entries!r}")
 
         results = []
-        for entries in qid2entries.values():
+        for entries in id2entries.values():
             results += entries
         app.logger.debug(f"Final Results: {results!r}")
         response = {"results": results}
@@ -203,63 +230,71 @@ def create_app(test_overrides=None, test_inst_path=None):
             response["errors"] = [{"type": err[0], "reason": err[1]} for err in errs]
         return response
 
-    def pre_screen(recording, question_id, user_id, diarization_metadata, rec_type):
-        """Submit a recording for pre-screening and upload it to the database if it passes."""
+    def pre_screen(recordings, rec_types, qb_ids, sentence_ids, user_id, diarization_metadatas):
+        """Submit a batch of recordings for pre-screening and upload them to the database if they all pass."""
         valid_rec_types = ["normal", "buzz", "answer"]
 
-        app.logger.debug(f"question_id = {question_id!r}")
-        app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
-        app.logger.debug(f"rec_type = {rec_type!r}")
+        submission_names = []
 
-        if not recording:
-            app.logger.error("No audio recording defined. Aborting")
-            return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
+        for i in range(len(recordings)):
+            recording = recordings[i]
+            rec_type = rec_types[i]
+            qb_id = qb_ids[i] if len(qb_ids) > i else None
+            sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
+            diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
 
-        if not rec_type:
-            app.logger.error("Form argument 'recType' is undefined. Aborting")
-            return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
-        elif rec_type not in valid_rec_types:
-            app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
-            return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
-        qid_required = rec_type != "buzz"
-        qid_used = qid_required or rec_type != "buzz"  # Redundant but for flexibility
+            app.logger.debug(f"qb_id = {qb_id!r}")
+            app.logger.debug(f"sentence_id = {sentence_id!r}")
+            app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
+            app.logger.debug(f"rec_type = {rec_type!r}")
 
-        question_id, success = error_handling.to_oid_soft(question_id)
-        if qid_used:
-            if qid_required and not question_id:
+            if not recording:
+                app.logger.error("No audio recording defined. Aborting")
+                return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
+
+            if not rec_type:
+                app.logger.error("Form argument 'recType' is undefined. Aborting")
+                return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
+            elif rec_type not in valid_rec_types:
+                app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
+                return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
+
+            qid_required = rec_type != "buzz"
+            if qid_required and not qb_id:
                 app.logger.error("Form argument 'qid' expected. Aborting")
-                return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
-            if not success:
-                app.logger.error("Form argument 'qid' is not a valid ObjectId. Aborting")
-                return "arg_qid_invalid", HTTPStatus.BAD_REQUEST
+                return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
 
-        # user_ids = QuizzrTPM.get_ids(qtpm.users)
-        # if not user_ids:
-        #     app.logger.error("No user IDs found. Aborting")
-        #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
-        # user_ids = qtpm.user_ids.copy()
-        # while True:
-        #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
-        #     if success:
-        #         break
-        #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
-        #     user_ids.remove(user_id)
-        #     if not user_ids:
-        #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
-        #         break
-        app.logger.debug(f"user_id = {user_id!r}")
+            # user_ids = QuizzrTPM.get_ids(qtpm.users)
+            # if not user_ids:
+            #     app.logger.error("No user IDs found. Aborting")
+            #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
+            # user_ids = qtpm.user_ids.copy()
+            # while True:
+            #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
+            #     if success:
+            #         break
+            #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
+            #     user_ids.remove(user_id)
+            #     if not user_ids:
+            #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
+            #         break
+            app.logger.debug(f"user_id = {user_id!r}")
 
-        metadata = {
-            "recType": rec_type,
-            "userId": user_id
-        }
-        if diarization_metadata:
-            metadata["diarMetadata"] = diarization_metadata
-        if question_id:
-            metadata["questionId"] = question_id
+            metadata = {
+                "recType": rec_type,
+                "userId": user_id
+            }
+            if diarization_metadata:
+                metadata["diarMetadata"] = diarization_metadata
+            if qb_id:
+                metadata["qb_id"] = int(qb_id)
+            if sentence_id:
+                metadata["sentenceId"] = int(sentence_id)
 
-        submission_name = _save_recording(rec_dir, recording, metadata)
-        app.logger.debug(f"submission_name = {submission_name!r}")
+            submission_name = _save_recording(rec_dir, recording, metadata)
+            app.logger.debug(f"submission_name = {submission_name!r}")
+
+            submission_names.append(submission_name)
         try:
             # accepted_submissions, errors = qp.pick_submissions(
             #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
@@ -272,7 +307,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             )
         except BrokenPipeError as e:
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+            return {"err": "broken_pipe_error"}, HTTPStatus.INTERNAL_SERVER_ERROR
 
         # Upload files
         file_paths = {}
@@ -284,7 +319,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                     file_paths[sub_rec_type] = []
                 file_paths[sub_rec_type].append(file_path)
 
-        app.logger.debug(f"file_paths = {file_paths}")
+        app.logger.debug(f"file_paths = {file_paths!r}")
 
         try:
             file2blob = {}
@@ -294,7 +329,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
-        app.logger.debug(f"file2blob = {file2blob}")
+        app.logger.debug(f"file2blob = {file2blob!r}")
 
         # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
@@ -317,13 +352,14 @@ def create_app(test_overrides=None, test_inst_path=None):
         for submission in results:
             rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
 
-        if results[submission_name]["case"] == "accepted":
-            return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+        for submission_name in submission_names:
+            if results[submission_name]["case"] == "rejected":
+                return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
 
-        if results[submission_name]["case"] == "err":
-            return results[submission_name]["err"], HTTPStatus.INTERNAL_SERVER_ERROR
+            if results[submission_name]["case"] == "err":
+                return {"err": results[submission_name]["err"]}, HTTPStatus.INTERNAL_SERVER_ERROR
 
-        return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
+        return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
     def handle_processing_results(arguments_batch):
         """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
@@ -359,7 +395,9 @@ def create_app(test_overrides=None, test_inst_path=None):
         if not user_answer:
             return "arg_a_undefined", HTTPStatus.BAD_REQUEST
 
-        question = qtpm.rec_questions.find_one({"_id": bson.ObjectId(qid)})
+        question = qtpm.rec_questions.find_one({"qb_id": int(qid)})
+        if not question:
+            return "question_not_found", HTTPStatus.NOT_FOUND
         correct_answer = question.get("answer")
         if not correct_answer:
             return "answer_not_found", HTTPStatus.NOT_FOUND
@@ -397,10 +435,14 @@ def create_app(test_overrides=None, test_inst_path=None):
         # decoded = {"uid": "dev"}
         user_id = decoded["uid"]
         if request.method == "GET":
-            return qtpm.get_profile(user_id, "private")
+            result = qtpm.get_profile(user_id, "private")
+            if result is None:
+                app.logger.error(f"User with ID '{user_id}' does not have a profile. Aborting")
+                abort(HTTPStatus.NOT_FOUND)
+            return result
         elif request.method == "POST":
             args = request.get_json()
-            path, op = api.path_for("modify_profile")
+            path, op = api.path_for("create_profile")
             schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
             err = _validate_args(args, schema)
             if err:
@@ -465,73 +507,120 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     @app.route("/question", methods=["GET"])
     def pick_game_question():
-        """Find a random recorded question and return the VTT and ID of the recording with the best evaluation."""
-        question_ids = QuizzrTPM.get_ids(qtpm.rec_questions)
-        if not question_ids:
-            app.logger.error("No recorded questions found. Aborting")
-            return "rec_empty_qids", HTTPStatus.NOT_FOUND
-
-        # question_ids = qtpm.rec_question_ids.copy()
-        while True:
-            next_question_id = random.choice(question_ids)
-            next_question = qtpm.rec_questions.find_one({"_id": next_question_id})
-            app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            app.logger.debug(f"next_question = {next_question!r}")
-
-            if next_question and next_question.get("recordings"):
-                audio = qtpm.find_best_audio_doc(
-                    next_question.get("recordings"),
-                    required_fields=["_id", "vtt", "gentleVtt"]
-                )
-                if audio:
-                    break
-            app.logger.warning(
-                f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
-            question_ids.remove(next_question_id)
-            if not question_ids:
-                app.logger.error("Failed to find a viable recorded question. Aborting")
-                return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        result = audio.copy()
-        result["qid"] = str(next_question_id)
-        return result
+        """Retrieve a batch of randomly-selected questions and attempt to retrieve the associated recordings with the
+        best evaluations possible without getting recordings from different users in the same question. """
+        # cursor = qtpm.rec_questions.find({"qb_id": {"$exists": True}}, {"qb_id": 1})
+        # question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
+        # if not question_ids:
+        #     app.logger.error("No recorded questions found. Aborting")
+        #     return "rec_empty_qids", HTTPStatus.NOT_FOUND
+        #
+        # # question_ids = qtpm.rec_question_ids.copy()
+        # audios = []
+        # while True:
+        #     next_question_id = random.choice(question_ids)
+        #     cursor = qtpm.rec_questions.find({"qb_id": next_question_id})
+        #     app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
+        #
+        #     all_valid = True
+        #     for sentence in cursor:
+        #         if sentence and sentence.get("recordings"):
+        #             app.logger.debug(f"sentence = {sentence!r}")
+        #             audio = qtpm.find_best_audio_doc(
+        #                 sentence.get("recordings"),
+        #                 required_fields=["_id", "questionId", "sentenceId", "vtt", "gentleVtt"]
+        #             )
+        #             if not audio:
+        #                 all_valid = False
+        #                 break
+        #             audios.append(audio)
+        #     if all_valid:
+        #         break
+        #     app.logger.warning(
+        #         f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
+        #     question_ids.remove(next_question_id)
+        #     if not question_ids:
+        #         app.logger.error("Failed to find a viable recorded question. Aborting")
+        #         return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
+        # return {"results": audios}
+        batch_size = int(request.args.get("batchSize") or 1)
+        cursor = qtpm.rec_questions.aggregate([
+            {'$group': {'_id': '$qb_id'}},
+            {'$sample': {'size': batch_size}},
+            {'$lookup': {
+                'from': 'Audio',
+                'as': 'audio',
+                'let': {'qb_id': '$_id'},
+                'pipeline': [
+                    {'$match': {'$expr': {'$eq': ['$qb_id', '$$qb_id']}}},
+                    {'$set': {'totalScore': {'$add': ['$score.wer', '$score.mer', '$score.wil']}}},
+                    {'$sort': {'totalScore': 1}},
+                    {'$group': {
+                        '_id': {'userId': '$userId', 'sentenceId': '$sentenceId'},
+                        'id': {'$first': '$_id'},
+                        'vtt': {'$first': '$vtt'},
+                        'gentleVtt': {'$first': '$gentleVtt'},
+                        'lowestScore': {'$first': '$totalScore'}
+                    }},
+                    {'$group': {
+                        '_id': '$_id.userId',
+                        'netScore': {'$sum': '$lowestScore'},
+                        'audio': {'$push': {
+                            'id': '$id',
+                            'sentenceId': '$_id.sentenceId',
+                            'vtt': '$vtt',
+                            'gentleVtt': '$gentleVtt'
+                        }}
+                    }},
+                    {'$sort': {'netScore': 1}},
+                    {'$limit': 1},
+                    {'$unwind': {'path': '$audio'}},
+                    {'$replaceRoot': {'newRoot': '$audio'}}
+                ]
+            }}
+        ])
+        questions = []
+        for doc in cursor:
+            doc["qb_id"] = doc.pop("_id")
+            questions.append(doc)
+        return {"results": questions}
 
     @app.route("/question/unrec", methods=["GET", "POST"])
     def unrec_question_resource():
         if request.method == "GET":
             difficulty = request.args.get("difficultyType")
             batch_size = request.args.get("batchSize")
-            return pick_recording_question(difficulty, batch_size)
+            return pick_recording_question(int(difficulty) if difficulty else difficulty, int(batch_size or 1))
         elif request.method == "POST":
             arguments_batch = request.get_json()
             return upload_questions(arguments_batch)
 
-    def pick_recording_question(difficulty, batch_size):
+    def pick_recording_question(difficulty: int, batch_size: int):
         """Find a random unrecorded question (or multiple) and return the ID and transcript."""
         if difficulty is not None:
-            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"],
-                                                                    int(difficulty))
+            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], difficulty)
             difficulty_query = {"recDifficulty": difficulty_query_op}
         else:
             difficulty_query = {}
 
-        question_ids = QuizzrTPM.get_ids(qtpm.unrec_questions, difficulty_query)
+        query = {**difficulty_query, "qb_id": {"$exists": True}}
+
+        cursor = qtpm.unrec_questions.find(query, {"qb_id": 1})
+        question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
         if not question_ids:
             app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
-        errors = []
-        if batch_size is not None and int(batch_size) > 1:
-            next_questions, errors = qtpm.pick_random_questions(question_ids, int(batch_size))
-            if next_questions is None:
-                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-            results = []
-            for doc in next_questions:
-                results.append({"transcript": doc["transcript"], "id": str(doc["_id"])})
-        else:
-            next_question = qtpm.pick_random_question(question_ids)
-            if next_question is None:
-                return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
-            results = [{"transcript": next_question["transcript"], "id": str(next_question["_id"])}]
+        next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
+                                                            ["transcript"], batch_size)
+        if next_questions is None:
+            return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+        results = []
+        for doc in next_questions:
+            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
+            if "sentenceId" in doc:
+                result_doc["sentenceId"] = doc["sentenceId"]
+            results.append(result_doc)
         return {"results": results, "errors": errors}
 
     def upload_questions(arguments_batch):
@@ -593,6 +682,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Try to decode the token if provided. If in a production environment, forbid access when the decode fails.
         This function is only callable in the context of a view function."""
         # return {"uid": app.config["DEV_UID"]}
+        app.logger.info("Retrieving ID token from header 'Authorization'...")
         id_token = request.headers.get("Authorization")
 
         id_token_log = _get_private_data_string(id_token)
@@ -603,8 +693,10 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         if not id_token:
             if app.config["Q_ENV"] == PROD_ENV_NAME:
+                app.logger.error("ID token not found. Aborting")
                 abort(HTTPStatus.UNAUTHORIZED)
             else:
+                app.logger.warning(f"ID token not found. Authenticated user with default ID {app.config['DEV_UID']}")
                 return {"uid": app.config["DEV_UID"]}
 
         # Cut off prefix if it is present
@@ -613,12 +705,14 @@ def create_app(test_overrides=None, test_inst_path=None):
             id_token = id_token[len(prefix):]
 
         try:
+            app.logger.info("Decoding token...")
             decoded = auth.verify_id_token(id_token)
         except (auth.InvalidIdTokenError, auth.ExpiredIdTokenError) as e:
-            logger.debug(repr(e))
+            app.logger.error(f"ID token error encountered: {e!r}. Aborting")
             decoded = None
             abort(HTTPStatus.UNAUTHORIZED)
         except auth.CertificateFetchError:
+            app.logger.error("Could not fetch certificate. Aborting")
             decoded = None
             abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
