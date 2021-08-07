@@ -16,7 +16,7 @@ import firebase_admin
 from firebase_admin import credentials, storage
 
 from sv_api import QuizzrAPISpec
-from sv_errors import UserExistsError
+from sv_errors import UsernameTakenError, ProfileNotFoundError, MalformedProfileError
 
 
 # Consists of mostly helper methods.
@@ -171,7 +171,9 @@ class QuizzrTPM:
 
     def get_file_blob(self, blob_path: str):
         """Retrieve a file from Firebase Storage and store it in-memory."""
-        blob = self.bucket.blob("/".join([self.app_config["BLOB_ROOT"], blob_path]))
+        blob_name = "/".join([self.app_config["BLOB_ROOT"], blob_path])
+        logging.debug(f"blob_name = {blob_name!r}")
+        blob = self.bucket.blob(blob_name)
         file_bytes = blob.download_as_bytes()
         fh = io.BytesIO(file_bytes)
         return fh
@@ -207,7 +209,6 @@ class QuizzrTPM:
             logging.warning(f"Audio document is missing at least one required field: {', '.join(required_fields)}. Skipping")
 
         logging.error("Failed to find a viable audio document")
-        return
 
     def find_questions(self, qids: list = None, **kwargs):
         """Generator function for getting questions from both collections."""
@@ -245,19 +246,12 @@ class QuizzrTPM:
             yield question
         logging.info(f"Found {rec_count} recorded question(s)")
 
-    def pick_random_question(self, question_ids):
-        while question_ids:
-            next_question_id = random.choice(question_ids)
-            next_question = self.unrec_questions.find_one({"_id": next_question_id})
-            logging.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-            logging.debug(f"next_question = {next_question!r}")
-            if next_question and "transcript" in next_question:
-                return next_question
-            logging.warning(f"ID {next_question_id} is invalid or associated question has no transcript")
-            question_ids.remove(next_question_id)
-        logging.error("Failed to find a viable unrecorded question. Aborting")
+    def pick_random_question(self, collection_name, question_ids, required_fields):
+        """Pick a random question from a list of question IDs and find it."""
+        return self.pick_random_questions(collection_name, question_ids, required_fields)
 
     def pick_random_questions(self, collection_name, question_ids, required_fields, batch_size=1):
+        """Search for multiple questions from a shuffled list of question IDs."""
         qids_pool = question_ids.copy()
         random.shuffle(qids_pool)
         next_batch_size = batch_size
@@ -346,11 +340,13 @@ class QuizzrTPM:
         self.rec_question_ids = self.get_ids(self.rec_questions)
         return results
 
-    def upload_many(self, file_paths: List[str], subdir) -> Dict[str, str]:
+    def upload_many(self, file_paths: List[str], subdir: str) -> Dict[str, str]:
         """Upload multiple audio files to Firebase Cloud Storage."""
         # TODO: Actual BrokenPipeError handling
         file2blob = {}
 
+        logging.info(f"Uploading {len(file_paths)} file(s)...")
+        upload_count = 0
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
             blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
@@ -358,40 +354,40 @@ class QuizzrTPM:
             blob = self.bucket.blob(blob_path)
             blob.upload_from_filename(file_path)
             file2blob[file_name] = blob_name
+            logging.debug(f"{upload_count}/{len(file_paths)}")
 
         return file2blob
 
-    def get_blob_path(self, blob_name, subdir: str):
+    def get_blob_path(self, blob_name: str, subdir: str) -> str:
         """Get the canonical name of a blob, which is <BLOB_ROOT>/<subdir>/<blob_name>"""
         return "/".join([self.app_config["BLOB_ROOT"], subdir, blob_name])
 
     def upload_one(self, file_path: str, subdir: str) -> str:
         """Upload one audio file to Firebase Cloud Storage."""
         # TODO: Actual BrokenPipeError handling
-        blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
-        blob_path = self.get_blob_path(blob_name, subdir)
-        blob = self.bucket.blob(blob_path)
-        blob.upload_from_filename(file_path)
-
-        return blob_name
+        file_name = os.path.basename(file_path)
+        return self.upload_many([file_path], subdir)[file_name]
 
     def mongodb_insert_submissions(
             self,
             sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
-            sub2vtt):
-        """Upload submission metadata to MongoDB."""
+            sub2vtt: Dict[str, str]):
+        """Upload submission metadata to MongoDB. Excludes any fields in sub2meta that start with '__'."""
         processing_list = ["normal"]
         unproc_audio_batch = []
         audio_batch = []
         uid2rec_docs = {}
+        logging.info("Preparing document entries...")
         for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
                 "version": self.app_config["VERSION"]
             }
             metadata = sub2meta[submission]
-            entry.update(metadata)
+            for k, v in metadata.items():
+                if not k.startswith("__"):
+                    entry[k] = v
             if metadata["recType"] in processing_list:
                 entry["gentleVtt"] = sub2vtt[submission]
             if metadata["recType"] not in processing_list:
@@ -401,6 +397,7 @@ class QuizzrTPM:
                 uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
             else:
                 unproc_audio_batch.append(entry)
+            logging.debug(f"entry = {entry!r}")
 
         logging.debug(f"unproc_audio_batch = {unproc_audio_batch}")
         logging.debug(f"audio_batch = {audio_batch}")
@@ -473,7 +470,7 @@ class QuizzrTPM:
         :raise pymongo.errors.DuplicateKeyError:
         """
         if self.users.find_one({"username": username}) is not None:
-            raise UserExistsError(username)
+            raise UsernameTakenError(username)
         profile_stub = self.api.get_schema_stub("User")
         profile_stub["_id"] = user_id
         profile_stub["pfp"] = pfp
@@ -491,7 +488,7 @@ class QuizzrTPM:
         """
         username = update_args.get("username")
         if username and self.users.find_one({"username": username}) is not None:
-            raise UserExistsError(username)
+            raise UsernameTakenError(username)
         return self.users.update_one({"_id": user_id}, {"$set": update_args})
 
     def delete_profile(self, user_id):
@@ -502,3 +499,19 @@ class QuizzrTPM:
         :return: A pymongo DeleteResult object. See documentation for further details
         """
         return self.users.delete_one({"_id": user_id})
+
+    def get_user_role(self, user_id):
+        """
+        Get the permission level of the user associated with the given ID
+
+        :param user_id: The internal ID of a user, defined by the _id field of a profile document
+        :return: The role of the user
+        :raise ProfileNotFoundError: When the profile associated with the given ID does not exist
+        :raise MalformedProfileError: When the profile associated with the given ID is missing the permission level
+        """
+        profile = self.users.find_one({"_id": user_id}, {"permLevel": 1})
+        if not profile:
+            raise ProfileNotFoundError(f"'{user_id}'")
+        if "permLevel" not in profile:
+            raise MalformedProfileError(f"Field 'permLevel' not found in profile for user '{user_id}'")
+        return profile["permLevel"]

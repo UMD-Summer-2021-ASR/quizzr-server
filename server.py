@@ -17,14 +17,12 @@ from flask_cors import CORS
 from openapi_schema_validator import validate
 from werkzeug.exceptions import abort
 
-import error_handling
 import rec_processing
 from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
-from sv_errors import UserExistsError, ProfileNotFoundError, MalformedProfileError
+from sv_errors import UsernameTakenError, ProfileNotFoundError, MalformedProfileError
 
 logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
-logger = logging.getLogger(__name__)
 
 DEV_ENV_NAME = "development"
 PROD_ENV_NAME = "production"
@@ -40,6 +38,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         instance_relative_config=True,
         instance_path=instance_path
     )
+    app.logger.info(f"Initializing server with instance path '{instance_path}'")
     CORS(app)
     server_dir = os.path.dirname(__file__)
     os.makedirs(app.instance_path, exist_ok=True)
@@ -110,6 +109,10 @@ def create_app(test_overrides=None, test_inst_path=None):
     api = QuizzrAPISpec(os.path.join(server_dir, "reference", "backend.yaml"))
 
     app.config.from_mapping(app_conf)
+    app.logger.info("Initializing third-party services...")
+    app.logger.info(f"MongoDB Database Name = '{app_conf['DATABASE']}'")
+    app.logger.info(f"Firebase Blob Root = '{app_conf['BLOB_ROOT']}'")
+    app.logger.info(f"Environment set to '{app_conf['Q_ENV']}'")
     qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir, api)
     qp = rec_processing.QuizzrProcessor(
         qtpm.database,
@@ -147,7 +150,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                     and (not qb_ids or len(recordings) == len(qb_ids))
                     and (not sentence_ids or len(recordings) == len(sentence_ids))
                     and (not diarization_metadatas or len(recordings) == len(diarization_metadatas))):
-                app.logger.error("Received incomplete form batch")
+                app.logger.error("Received incomplete form batch. Aborting")
                 return "incomplete_batch", HTTPStatus.BAD_REQUEST
 
             # for i in range(len(recordings)):
@@ -176,15 +179,12 @@ def create_app(test_overrides=None, test_inst_path=None):
         results_projection = ["_id", "diarMetadata"]  # In addition to the transcript
 
         app.logger.info(f"Finding a batch ({max_docs} max) of unprocessed audio documents...")
-        audio_doc_count = qtpm.unproc_audio.count_documents({"_id": {"$exists": True}}, limit=max_docs)
-        if audio_doc_count == 0:
-            app.logger.error("Could not find any audio documents")
-            return "empty_unproc_audio", HTTPStatus.NOT_FOUND
         audio_cursor = qtpm.unproc_audio.find(limit=max_docs)
         id2entries = {}
         qids = []
+        audio_doc_count = 0
         for audio_doc in audio_cursor:
-            app.logger.debug(f"audio_doc = {audio_doc!r}")
+            _debug_variable("audio_doc", audio_doc)
 
             qid = audio_doc.get("qb_id")
             sentence_id = audio_doc.get("sentenceId")
@@ -201,8 +201,13 @@ def create_app(test_overrides=None, test_inst_path=None):
                     entry[field] = audio_doc[field]
             id2entries[id_key].append(entry)
             qids.append(qid)
+            audio_doc_count += 1
 
-        app.logger.debug(f"id2entries = {id2entries!r}")
+        if audio_doc_count == 0:
+            app.logger.error("Could not find any audio documents")
+            return "empty_unproc_audio", HTTPStatus.NOT_FOUND
+
+        _debug_variable("id2entries", id2entries)
         app.logger.info(f"Found {audio_doc_count} unprocessed audio document(s)")
         if not qids:
             app.logger.error("No audio documents contain question IDs")
@@ -210,6 +215,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         question_gen = qtpm.find_questions(qids)
         for question in question_gen:
+            _debug_variable("question", question)
             qid = question["qb_id"]
             sentence_id = question.get("sentenceId")
             id_key = "_".join([str(qid), str(sentence_id)]) if sentence_id else str(qid)
@@ -219,7 +225,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                 for entry in entries:
                     entry["transcript"] = transcript
 
-        app.logger.debug(f"id2entries = {id2entries!r}")
+        _debug_variable("id2entries", id2entries)
 
         results = []
         for entries in id2entries.values():
@@ -243,26 +249,26 @@ def create_app(test_overrides=None, test_inst_path=None):
             sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
             diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
 
-            app.logger.debug(f"qb_id = {qb_id!r}")
-            app.logger.debug(f"sentence_id = {sentence_id!r}")
-            app.logger.debug(f"diarization_metadata = {diarization_metadata!r}")
-            app.logger.debug(f"rec_type = {rec_type!r}")
+            _debug_variable("qb_id", qb_id)
+            _debug_variable("sentence_id", sentence_id)
+            _debug_variable("diarization_metadata", diarization_metadata)
+            _debug_variable("rec_type", rec_type)
 
             if not recording:
                 app.logger.error("No audio recording defined. Aborting")
-                return {"err": "arg_audio_undefined"}, HTTPStatus.BAD_REQUEST
+                return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
 
             if not rec_type:
                 app.logger.error("Form argument 'recType' is undefined. Aborting")
-                return {"err": "arg_recType_undefined"}, HTTPStatus.BAD_REQUEST
+                return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
             elif rec_type not in valid_rec_types:
-                app.logger.error(f"Invalid rec type {rec_type!r}. Aborting")
-                return {"err": "arg_recType_invalid"}, HTTPStatus.BAD_REQUEST
+                app.logger.error(f"Invalid rec type '{rec_type!r}'. Aborting")
+                return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
 
             qid_required = rec_type != "buzz"
             if qid_required and not qb_id:
                 app.logger.error("Form argument 'qid' expected. Aborting")
-                return {"err": "arg_qid_undefined"}, HTTPStatus.BAD_REQUEST
+                return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
 
             # user_ids = QuizzrTPM.get_ids(qtpm.users)
             # if not user_ids:
@@ -278,7 +284,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             #     if not user_ids:
             #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
             #         break
-            app.logger.debug(f"user_id = {user_id!r}")
+            _debug_variable("user_id", user_id)
 
             metadata = {
                 "recType": rec_type,
@@ -290,15 +296,15 @@ def create_app(test_overrides=None, test_inst_path=None):
                 metadata["qb_id"] = int(qb_id)
             if sentence_id:
                 metadata["sentenceId"] = int(sentence_id)
+            elif len(recordings) > 1:
+                app.logger.debug("Field 'sentenceId' not specified in batch submission")
+                metadata["__sentenceIndex"] = i
 
             submission_name = _save_recording(rec_dir, recording, metadata)
-            app.logger.debug(f"submission_name = {submission_name!r}")
+            _debug_variable("submission_name", submission_name)
 
             submission_names.append(submission_name)
         try:
-            # accepted_submissions, errors = qp.pick_submissions(
-            #     rec_processing.QuizzrWatcher.queue_submissions(qtpm.REC_DIR)
-            # )
             results = qp.pick_submissions(
                 rec_processing.QuizzrWatcher.queue_submissions(
                     app.config["REC_DIR"],
@@ -307,9 +313,10 @@ def create_app(test_overrides=None, test_inst_path=None):
             )
         except BrokenPipeError as e:
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return {"err": "broken_pipe_error"}, HTTPStatus.INTERNAL_SERVER_ERROR
+            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
-        # Upload files
+        # Split by recType
+        app.logger.info("Preparing results for upload...")
         file_paths = {}
         for submission in results:
             file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
@@ -319,17 +326,18 @@ def create_app(test_overrides=None, test_inst_path=None):
                     file_paths[sub_rec_type] = []
                 file_paths[sub_rec_type].append(file_path)
 
-        app.logger.debug(f"file_paths = {file_paths!r}")
+        _debug_variable("file_paths", file_paths)
 
+        # Upload files
         try:
             file2blob = {}
-            for rt, paths in file_paths.items():
+            for rt, paths in file_paths.items():  # Organize by recType
                 file2blob.update(qtpm.upload_many(paths, rt))
         except BrokenPipeError as e:
             app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
             return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
-        app.logger.debug(f"file2blob = {file2blob!r}")
+        _debug_variable("file2blob", file2blob)
 
         # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
@@ -342,12 +350,14 @@ def create_app(test_overrides=None, test_inst_path=None):
                 if "vtt" in doc:
                     sub2vtt[submission] = doc.get("vtt")
 
-        # Insert submissions
+        # Upload submission metadata to MongoDB
         qtpm.mongodb_insert_submissions(
             sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
             sub2meta=sub2meta,
             sub2vtt=sub2vtt
         )
+
+        app.logger.info("Evaluating outcome of pre-screen...")
 
         for submission in results:
             rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
@@ -357,7 +367,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                 return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
 
             if results[submission_name]["case"] == "err":
-                return {"err": results[submission_name]["err"]}, HTTPStatus.INTERNAL_SERVER_ERROR
+                return results[submission_name]["err"], HTTPStatus.INTERNAL_SERVER_ERROR
 
         return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
@@ -402,7 +412,9 @@ def create_app(test_overrides=None, test_inst_path=None):
         if not correct_answer:
             return "answer_not_found", HTTPStatus.NOT_FOUND
 
-        return {"correct": fuzz.token_set_ratio(user_answer, correct_answer) >= app.config["MIN_ANSWER_SIMILARITY"]}
+        answer_similarity = fuzz.token_set_ratio(user_answer, correct_answer)
+        _debug_variable("answer_similarity", answer_similarity)
+        return {"correct": answer_similarity >= app.config["MIN_ANSWER_SIMILARITY"]}
 
     @app.route("/audio/<path:blob_path>", methods=["GET"])
     def retrieve_audio_file(blob_path):
@@ -415,10 +427,12 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
         if socket_server_key:
-            return {"err_id": "secret_key_exists",
-                    "err": "A secret key has already been generated."}, HTTPStatus.UNAUTHORIZED
+            app.logger.error("Secret key for socket server already exists. Aborting")
+            return "secret_key_exists", HTTPStatus.UNAUTHORIZED
+        app.logger.info("Generating secret key for socket server...")
         key = token_urlsafe(256)
         socket_server_key["value"] = key
+        app.logger.info("Successfully generated secret key for socket server")
         return {"key": key}
 
     @app.put("/game_results")
@@ -452,7 +466,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             except pymongo.errors.DuplicateKeyError:
                 app.logger.error("User already registered. Aborting")
                 return "already_registered", HTTPStatus.BAD_REQUEST
-            except UserExistsError as e:
+            except UsernameTakenError as e:
                 app.logger.error(f"User already exists: {e}. Aborting")
                 return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
             if result:
@@ -470,22 +484,24 @@ def create_app(test_overrides=None, test_inst_path=None):
 
             try:
                 result = qtpm.modify_profile(user_id, update_args)
-            except UserExistsError as e:
-                app.logger.error(f"User already exists: {e}. Aborting")
-                return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
+            except UsernameTakenError as e:
+                app.logger.error(f"Username already taken: {e}. Aborting")
+                return f"username_taken: {e}", HTTPStatus.BAD_REQUEST
 
             if result:
+                app.logger.info("User profile successfully modified")
                 return "user_modified", HTTPStatus.OK
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
         elif request.method == "DELETE":
-            qtpm.delete_profile(user_id)
             result = qtpm.delete_profile(user_id)
             if result:
+                app.logger.info("User profile successfully deleted")
                 return "user_deleted", HTTPStatus.OK
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
     @app.route("/profile/<username>", methods=["GET", "PATCH", "DELETE"])
     def other_profile(username):
+        _debug_variable("username", username)
         other_user_profile = qtpm.users.find_one({"username": username}, {"_id": 1})
         if not other_user_profile:
             abort(HTTPStatus.NOT_FOUND)
@@ -497,11 +513,13 @@ def create_app(test_overrides=None, test_inst_path=None):
             update_args = request.get_json()
             result = qtpm.modify_profile(other_user_id, update_args)
             if result:
+                app.logger.info("User profile successfully modified")
                 return "other_user_modified", HTTPStatus.OK
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
         elif request.method == "DELETE":
             result = qtpm.delete_profile(other_user_id)
             if result:
+                app.logger.info("User profile successfully deleted")
                 return "other_user_deleted", HTTPStatus.OK
             return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
 
@@ -626,11 +644,11 @@ def create_app(test_overrides=None, test_inst_path=None):
     def upload_questions(arguments_batch):
         """Upload a batch of unrecorded questions."""
         arguments_list = arguments_batch["arguments"]
-        app.logger.debug(f"arguments_list = {arguments_list!r}")
+        _debug_variable("arguments_list", arguments_list)
 
-        app.logger.info(f"Uploading {len(arguments_list)} unrecorded questions...")
-        qtpm.unrec_questions.insert_many(arguments_list)
-        app.logger.info("Successfully uploaded questions")
+        app.logger.info(f"Uploading {len(arguments_list)} unrecorded question(s)...")
+        results = qtpm.unrec_questions.insert_many(arguments_list)
+        app.logger.info(f"Successfully uploaded {len(results.inserted_ids)} question(s)")
         return {"msg": "unrec_question.upload_success"}
 
     @app.route("/validate", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"])
@@ -640,7 +658,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         decoded = _verify_id_token()
         user_id = decoded["uid"]
         try:
-            subject = _get_user_role(user_id)
+            subject = qtpm.get_user_role(user_id)
         except ProfileNotFoundError as e:
             subject = "anonymous"
             app.logger.info(f"Profile not found: {e}. Subject registered as 'anonymous'")
@@ -666,13 +684,13 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Write a WAV file and its JSON metadata to disk."""
         app.logger.info("Saving recording...")
         submission_name = _get_next_submission_name()
-        app.logger.debug(f"submission_name = {submission_name!r}")
+        _debug_variable("submission_name", submission_name)
         submission_path = os.path.join(directory, submission_name)
         recording.save(submission_path + ".wav")
         app.logger.info("Saved recording successfully")
 
         app.logger.info("Writing metadata...")
-        app.logger.debug(f"metadata = {metadata!r}")
+        _debug_variable("metadata", metadata)
         with open(submission_path + ".json", "w") as transaction_f:
             transaction_f.write(bson.json_util.dumps(metadata))
         app.logger.info("Successfully wrote metadata")
@@ -696,7 +714,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                 app.logger.error("ID token not found. Aborting")
                 abort(HTTPStatus.UNAUTHORIZED)
             else:
-                app.logger.warning(f"ID token not found. Authenticated user with default ID {app.config['DEV_UID']}")
+                app.logger.warning(f"ID token not found. Authenticated user with default ID '{app.config['DEV_UID']}'")
                 return {"uid": app.config["DEV_UID"]}
 
         # Cut off prefix if it is present
@@ -731,22 +749,6 @@ def create_app(test_overrides=None, test_inst_path=None):
         """
         return request.args.get(flag) is not None
 
-    def _get_user_role(user_id):
-        """
-        Get the permission level of the user associated with the given ID
-
-        :param user_id: The internal ID of a user, defined by the _id field of a profile document
-        :return: The role of the user
-        :raise ProfileNotFoundError: When the profile associated with the given ID does not exist
-        :raise MalformedProfileError: When the profile associated with the given ID is missing the permission level
-        """
-        profile = qtpm.users.find_one({"_id": user_id}, {"permLevel": 1})
-        if not profile:
-            raise ProfileNotFoundError(f"'{user_id}'")
-        if "permLevel" not in profile:
-            raise MalformedProfileError(f"Field 'permLevel' not found in profile for user '{user_id}'")
-        return profile["permLevel"]
-
     def _validate_args(args: dict, schema: dict):
         """
         Shortcut for logic flow of schema validation when handling requests.
@@ -764,5 +766,17 @@ def create_app(test_overrides=None, test_inst_path=None):
             response.headers["Content-Type"] = "text/plain"
             err = (response, HTTPStatus.BAD_REQUEST)
         return err
+
+    def _debug_variable(name: str, v, include_type=False, private=False):
+        """Send a variable's name and value to the given logger."""
+        if private:
+            val = _get_private_data_string(v)
+        else:
+            val = v
+        if include_type:
+            prefix = f"{type(v)} "
+        else:
+            prefix = ""
+        app.logger.debug(f"{prefix}{name} = {val!r}")
 
     return app

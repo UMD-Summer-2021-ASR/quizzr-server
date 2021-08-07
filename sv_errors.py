@@ -2,7 +2,7 @@ class QuizzrDFError(Exception):
     """Base exception class for the data flow server"""
 
 
-class UserExistsError(QuizzrDFError):
+class UsernameTakenError(QuizzrDFError):
     """Raised when a user under a specific username already exists"""
 
 

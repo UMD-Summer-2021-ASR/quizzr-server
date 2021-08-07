@@ -129,23 +129,24 @@ class QuizzrProcessor:
             wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
             if sub2meta.get(submission) is None:
-                logging.error(f"Metadata for submission {submission} not found. Skipping")
+                logging.error(f"Metadata for submission '{submission}' not found. Skipping")
                 results[submission]["err"] = "meta_not_found"
                 continue
-            qid = sub2meta[submission].get("qb_id")
+            metadata = sub2meta[submission]
+            qid = metadata.get("qb_id")
             logging.debug(f"{type(qid)} qid = {qid!r}")
 
             if qid is None:
-                logging.error(f"Question ID for submission {submission} not found. Skipping")
+                logging.error(f"Question ID for submission '{submission}' not found. Skipping")
                 results[submission]["err"] = "qid_not_found"
                 continue
 
             query = {"qb_id": qid}
 
-            sid = sub2meta[submission].get("sentenceId")
+            sid = metadata.get("sentenceId")
             logging.debug(f"{type(sid)} sid = {sid!r}")
             if sid is None:
-                logging.debug(f"Sentence ID for submission {submission} not found. Continuing without sentence ID")
+                logging.debug(f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
                 # logging.error(f"Sentence ID for submission {submission} not found. Skipping")
                 # results[submission]["err"] = "sid_not_found"
                 # continue
@@ -170,6 +171,15 @@ class QuizzrProcessor:
                 results[submission]["err"] = "transcript_not_found"
                 continue
 
+            # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
+            if "__sentenceIndex" in metadata:
+                logging.info("Attempting transcript segmentation...")
+                if "tokenizations" in question:
+                    slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+                    r_transcript = r_transcript[slice_start:slice_end]
+                else:
+                    logging.info("Could not segment transcript. Submission may not pass pre-screen")
+
             accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
             if accuracy is None:
                 results[submission]["err"] = "runtime_error"
@@ -188,14 +198,15 @@ class QuizzrProcessor:
     # ****************** HELPER METHODS *********************
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
         """Do a forced alignment and return the percentage of words aligned (or known) along with the VTT."""
-        total_words = len(self.process_transcript(r_transcript))
-        total_aligned_words = 0
         try:
             alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         except RuntimeError as e:
             logging.error(f"Encountered RuntimeError: {e}. Aborting")
             return None, None
         words = alignment.words
+        # total_words = len(self.process_transcript(r_transcript))
+        total_words = len(words)
+        total_aligned_words = 0
         for word_data in words:
             unk = self.config["checkUnk"] and word_data.alignedWord == self.config["unkToken"]
             if word_data.case == "success" and not unk:
@@ -299,6 +310,7 @@ class QuizzrProcessor:
 def delete_submission(directory, submission_name, file_types):
     """Remove a submission from disk."""
     # TODO: Make it find all files with submission_name instead.
+    logging.info(f"Removing submission with name '{submission_name}'")
     submission_path = os.path.join(directory, submission_name)
     for ext in file_types:
         file_path = ".".join([submission_path, ext])
