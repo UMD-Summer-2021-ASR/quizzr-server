@@ -1,13 +1,16 @@
 import json
 import logging
 import os
-import sys
+from copy import deepcopy
+from sys import exit
 from datetime import datetime
 from http import HTTPStatus
 from secrets import token_urlsafe
+from typing import List, Union, Tuple, Dict, Any, Optional
 
 import jsonschema.exceptions
 import pymongo.errors
+import werkzeug.datastructures
 from firebase_admin import auth
 from fuzzywuzzy import fuzz
 
@@ -15,9 +18,11 @@ import bson.json_util
 from flask import Flask, request, render_template, send_file, make_response
 from flask_cors import CORS
 from openapi_schema_validator import validate
+from pymongo import UpdateOne
 from werkzeug.exceptions import abort
 
 import rec_processing
+import sv_util
 from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
 from sv_errors import UsernameTakenError, ProfileNotFoundError, MalformedProfileError
@@ -29,8 +34,14 @@ PROD_ENV_NAME = "production"
 TEST_ENV_NAME = "testing"
 
 
-def create_app(test_overrides=None, test_inst_path=None):
-    """App factory function for the data flow server"""
+def create_app(test_overrides: dict = None, test_inst_path: str = None):
+    """
+    App factory function for the data flow server
+
+    :param test_overrides: A set of overrides to merge on top of the server's configuration
+    :param test_inst_path: The instance path of the server. Has the highest overriding priority
+    :return: The data flow server as a Flask app
+    """
     instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
         or os.path.expanduser(os.path.join("~", "quizzr_server"))
     app = Flask(
@@ -92,7 +103,7 @@ def create_app(test_overrides=None, test_inst_path=None):
     for var in app_conf:
         if type(app_conf[var]) is not str and var in os.environ:
             app.logger.critical(f"Cannot override non-string config field '{var}' through environment variable")
-            sys.exit(1)
+            exit(1)
     app_conf.update(os.environ)
     if test_overrides:
         app_conf.update(test_overrides)
@@ -129,7 +140,9 @@ def create_app(test_overrides=None, test_inst_path=None):
         GET: Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
         Atlas.
 
-        POST: Submit a recording for pre-screening and upload it to the database if it passes.
+        POST: Submit one or more recordings for pre-screening and upload them to the database if they all pass. The
+        arguments for each recording correspond to an index. If providing any values for an argument, represent empty
+        arguments with an empty string.
 
         PATCH: Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
         Additionally, update the recording history of the associated questions and users.
@@ -158,7 +171,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             #     rec_type = rec_types[i]
             #     qb_id = qb_ids[i] if len(qb_ids) > i else None
             #     sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
-            #     diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
+            #     diarization_metadata = diarization_metadata_list[i] if len(diarization_metadata_list) > i else None
             #     result = pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata)
             #
             #     # Stops pre-screening on the first submission that fails. Meant to represent an all-or-nothing logic
@@ -166,14 +179,18 @@ def create_app(test_overrides=None, test_inst_path=None):
             #     if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
             #         return result
             # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
-            return pre_screen(recordings, rec_types, qb_ids, sentence_ids, user_id, diarization_metadatas)
+            return pre_screen(recordings, rec_types, user_id, qb_ids, sentence_ids, diarization_metadatas)
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
 
     def get_unprocessed_audio():
-        """Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
-        Atlas."""
+        """
+        Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
+        Atlas.
+
+        :return: A dictionary containing an array of dictionaries under the key "results".
+        """
         max_docs = app.config["UNPROC_FIND_LIMIT"]
         errs = []
         results_projection = ["_id", "diarMetadata"]  # In addition to the transcript
@@ -236,8 +253,24 @@ def create_app(test_overrides=None, test_inst_path=None):
             response["errors"] = [{"type": err[0], "reason": err[1]} for err in errs]
         return response
 
-    def pre_screen(recordings, rec_types, qb_ids, sentence_ids, user_id, diarization_metadatas):
-        """Submit a batch of recordings for pre-screening and upload them to the database if they all pass."""
+    def pre_screen(recordings: List[werkzeug.datastructures.FileStorage],
+                   rec_types: List[str],
+                   user_id: str,
+                   qb_ids: List[Union[int, str]] = None,
+                   sentence_ids: List[Union[int, str]] = None,
+                   diarization_metadata_list: List[str] = None) -> Tuple[Union[dict, str], int]:
+        """
+        Submit one or more recordings for pre-screening and upload them to the database if they all pass.
+        WARNING: Submitting recordings of different rec_types in the same batch can give unpredictable results.
+
+        :param recordings: A list of audio files
+        :param rec_types: A list of rec_types associated with each recording
+        :param user_id: The ID of the submitter
+        :param qb_ids: A list of question IDs associated with each recording
+        :param sentence_ids: The associated sentence IDs. Only required for segmented questions
+        :param diarization_metadata_list: (optional) The associated parameter sets for diarization.
+        :return: A dictionary with the key "prescreenSuccessful", or a string if an error occurred, and a status code.
+        """
         valid_rec_types = ["normal", "buzz", "answer"]
 
         submission_names = []
@@ -247,7 +280,7 @@ def create_app(test_overrides=None, test_inst_path=None):
             rec_type = rec_types[i]
             qb_id = qb_ids[i] if len(qb_ids) > i else None
             sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
-            diarization_metadata = diarization_metadatas[i] if len(diarization_metadatas) > i else None
+            diarization_metadata = diarization_metadata_list[i] if len(diarization_metadata_list) > i else None
 
             _debug_variable("qb_id", qb_id)
             _debug_variable("sentence_id", sentence_id)
@@ -296,7 +329,7 @@ def create_app(test_overrides=None, test_inst_path=None):
                 metadata["qb_id"] = int(qb_id)
             if sentence_id:
                 metadata["sentenceId"] = int(sentence_id)
-            elif len(recordings) > 1:
+            elif rec_type == "normal" and len(recordings) > 1:
                 app.logger.debug("Field 'sentenceId' not specified in batch submission")
                 metadata["__sentenceIndex"] = i
 
@@ -371,7 +404,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
         return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
-    def handle_processing_results(arguments_batch):
+    def handle_processing_results(arguments_batch: Dict[str, List[Dict[str, Any]]]):
         """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
         Additionally, update the recording history of the associated questions and users."""
         arguments_list = arguments_batch.get("arguments")
@@ -437,10 +470,140 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     @app.put("/game_results")
     def handle_game_results():
-        """Update the database with the results of a game session."""
+        """
+        Update the database with the results of a game session.
+        Precondition: session_results["questionStats"]["played"] != 0
+        """
         if request.headers.get("Authorization") != socket_server_key["value"]:
             abort(HTTPStatus.UNAUTHORIZED)
-        return {"err": "This feature is not implemented yet.", "err_id": "not_implemented"}, HTTPStatus.NOT_FOUND
+        session_results = request.get_json()
+        mode = session_results["mode"]
+        category = session_results["category"]
+        user_results = session_results["users"]
+        update_batch = []
+        for username, update_args in user_results.items():
+            user_doc = qtpm.users.find_one({"username": username})
+            if "stats" not in user_doc:
+                user_doc["stats"] = {}
+
+            if mode not in user_doc["stats"]:
+                user_doc["stats"][mode] = {
+                    "questions": {
+                        "played": {"all": 0},
+                        "buzzed": {"all": 0},
+                        "correct": {"all": 0},
+                        "cumulativeProgressOnBuzz": {},
+                        "avgProgressOnBuzz": {}
+                    },
+                    "game": {
+                        "played": {"all": 0},
+                        "won": {"all": 0}
+                    }
+                }
+
+            old_question_stats = user_doc["stats"][mode]["questions"]
+
+            for field in ["played", "buzzed", "correct"]:
+                if category not in old_question_stats[field]:
+                    old_question_stats[field][category] = 0
+
+            old_game_stats = user_doc["stats"][mode]["game"]
+
+            for field in ["played", "won"]:
+                if category not in old_game_stats[field]:
+                    old_game_stats[field][category] = 0
+
+            question_stats = update_args["questionStats"]
+
+            played_all = old_question_stats["played"]["all"] + question_stats["played"]
+            played_categorical = old_question_stats["played"][category] + question_stats["played"]
+            buzzed_all = old_question_stats["buzzed"]["all"] + question_stats["buzzed"]
+            buzzed_categorical = old_question_stats["buzzed"][category] + question_stats["buzzed"]
+
+            old_c_progress_on_buzz = old_question_stats["cumulativeProgressOnBuzz"]
+            c_progress_on_buzz = question_stats["cumulativeProgressOnBuzz"]
+
+            old_avg_progress_on_buzz = old_question_stats["avgProgressOnBuzz"]
+            avg_progress_on_buzz_update = {}
+            for k in c_progress_on_buzz.keys():
+                if k not in old_c_progress_on_buzz:
+                    old_c_progress_on_buzz[k] = {"all": 0}
+
+                if category not in old_c_progress_on_buzz[k]:
+                    old_c_progress_on_buzz[k][category] = 0
+
+                avg_progress_on_buzz_update[k] = {
+                    "all": (old_c_progress_on_buzz[k]["all"] + c_progress_on_buzz[k]) / played_all,
+                    category: (old_c_progress_on_buzz[k][category] + c_progress_on_buzz[k]) / played_categorical
+                }
+
+            avg_progress_on_buzz = deepcopy(old_avg_progress_on_buzz)
+            sv_util.deep_update(avg_progress_on_buzz, avg_progress_on_buzz_update)
+            buzz_rate = {
+                "all": buzzed_all / played_all,
+                category: buzzed_categorical / played_categorical
+            }
+
+            buzz_accuracy = {}
+            if buzzed_all == 0:
+                buzz_accuracy["all"] = None
+            else:
+                buzz_accuracy["all"] = (old_question_stats["correct"]["all"] + question_stats["correct"]) / buzzed_all
+            if buzzed_categorical == 0:
+                buzz_accuracy[category] = None
+            else:
+                buzz_accuracy[category] = (old_question_stats["correct"][category] + question_stats["correct"])\
+                                          / buzzed_categorical
+
+            win_rate = {
+                "all": (old_game_stats["won"]["all"] + int(update_args["won"]))
+                / (old_game_stats["played"]["all"] + 1),
+                category: (old_game_stats["won"][category] + int(update_args["won"]))
+                / (old_game_stats["played"][category] + 1)
+            }
+
+            stats_index = f"stats.{mode}"
+            q_index = f"{stats_index}.questions"
+            g_index = f"{stats_index}.game"
+
+            processed_update_args = {
+                "$inc": {
+                    f"{q_index}.played.all": question_stats["played"],
+                    f"{q_index}.buzzed.all": question_stats["buzzed"],
+                    f"{q_index}.correct.all": question_stats["correct"],
+                    f"{q_index}.cumulativeProgressOnBuzz.percentQuestionRead.all": c_progress_on_buzz["percentQuestionRead"],
+                    f"{q_index}.cumulativeProgressOnBuzz.numSentences.all": c_progress_on_buzz["numSentences"],
+
+                    f"{g_index}.played.all": 1,
+                    f"{g_index}.finished.all": int(update_args["finished"]),
+                    f"{g_index}.won.all": int(update_args["won"]),
+
+                    f"{q_index}.played.{category}": question_stats["played"],
+                    f"{q_index}.buzzed.{category}": question_stats["buzzed"],
+                    f"{q_index}.correct.{category}": question_stats["correct"],
+                    f"{q_index}.cumulativeProgressOnBuzz.percentQuestionRead.{category}": c_progress_on_buzz["percentQuestionRead"],
+                    f"{q_index}.cumulativeProgressOnBuzz.numSentences.{category}": c_progress_on_buzz["numSentences"],
+
+                    f"{g_index}.played.{category}": 1,
+                    f"{g_index}.finished.{category}": int(update_args["finished"]),
+                    f"{g_index}.won.{category}": int(update_args["won"])
+                },
+                "$set": {
+                    f"{q_index}.buzzRate.all": buzz_rate["all"],
+                    f"{q_index}.buzzRate.{category}": buzz_rate[category],
+
+                    f"{q_index}.buzzAccuracy.all": buzz_accuracy["all"],
+                    f"{q_index}.buzzAccuracy.{category}": buzz_accuracy[category],
+
+                    f"{q_index}.avgProgressOnBuzz": avg_progress_on_buzz,
+
+                    f"{g_index}.winRate.all": win_rate["all"],
+                    f"{g_index}.winRate.{category}": win_rate[category]
+                }
+            }
+            update_batch.append(UpdateOne({"username": username}, processed_update_args))
+        results = qtpm.users.bulk_write(update_batch)
+        return {"updateSuccessful": results.matched_count == len(session_results["users"])}
 
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
@@ -501,6 +664,7 @@ def create_app(test_overrides=None, test_inst_path=None):
 
     @app.route("/profile/<username>", methods=["GET", "PATCH", "DELETE"])
     def other_profile(username):
+        """Resource for the profile of any user."""
         _debug_variable("username", username)
         other_user_profile = qtpm.users.find_one({"username": username}, {"_id": 1})
         if not other_user_profile:
@@ -526,7 +690,7 @@ def create_app(test_overrides=None, test_inst_path=None):
     @app.route("/question", methods=["GET"])
     def pick_game_question():
         """Retrieve a batch of randomly-selected questions and attempt to retrieve the associated recordings with the
-        best evaluations possible without getting recordings from different users in the same question. """
+        best evaluations possible without getting recordings from different users in the same question."""
         # cursor = qtpm.rec_questions.find({"qb_id": {"$exists": True}}, {"qb_id": 1})
         # question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
         # if not question_ids:
@@ -614,7 +778,13 @@ def create_app(test_overrides=None, test_inst_path=None):
             return upload_questions(arguments_batch)
 
     def pick_recording_question(difficulty: int, batch_size: int):
-        """Find a random unrecorded question (or multiple) and return the ID and transcript."""
+        """
+        Find a random unrecorded question (or multiple) and return the ID and transcript.
+
+        :param difficulty: The difficulty type to use
+        :param batch_size: The number of questions to retrieve
+        :return: A dictionary containing a list of "results" and "errors"
+        """
         if difficulty is not None:
             difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], difficulty)
             difficulty_query = {"recDifficulty": difficulty_query_op}
@@ -641,8 +811,13 @@ def create_app(test_overrides=None, test_inst_path=None):
             results.append(result_doc)
         return {"results": results, "errors": errors}
 
-    def upload_questions(arguments_batch):
-        """Upload a batch of unrecorded questions."""
+    def upload_questions(arguments_batch: Dict[str, List[dict]]) -> dict:
+        """
+        Upload a batch of unrecorded questions.
+
+        :param arguments_batch: A dictionary containing the list of "arguments"
+        :return: A "msg" stating that the upload was successful if nothing went wrong
+        """
         arguments_list = arguments_batch["arguments"]
         _debug_variable("arguments_list", arguments_list)
 
@@ -680,7 +855,7 @@ def create_app(test_overrides=None, test_inst_path=None):
         """Return a filename safe date-timestamp of the current system time"""
         return str(datetime.now().strftime("%Y.%m.%d %H.%M.%S.%f"))
 
-    def _save_recording(directory, recording, metadata):
+    def _save_recording(directory: str, recording: werkzeug.datastructures.FileStorage, metadata: dict):
         """Write a WAV file and its JSON metadata to disk."""
         app.logger.info("Saving recording...")
         submission_name = _get_next_submission_name()
@@ -737,7 +912,12 @@ def create_app(test_overrides=None, test_inst_path=None):
         return decoded
 
     def _get_private_data_string(original):
-        """Utility function for redacting private data if 'LOG_PRIVATE_DATA' is not True"""
+        """
+        Utility function for redacting private data if 'LOG_PRIVATE_DATA' is not True
+
+        :param original: The original value
+        :return: The original value if "LOG_PRIVATE_DATA" is True, otherwise "[REDACTED]"
+        """
         if app.config["LOG_PRIVATE_DATA"]:
             return original
         return "[REDACTED]"
@@ -746,10 +926,13 @@ def create_app(test_overrides=None, test_inst_path=None):
         """
         Detect if a query 'flag' is present (e.g., "example.com/foo?bar" vs "example.com/foo"). Only callable in the
         context of a Flask view function.
+
+        :param flag: The name of the flag
+        :return: Whether the flag is present
         """
         return request.args.get(flag) is not None
 
-    def _validate_args(args: dict, schema: dict):
+    def _validate_args(args: dict, schema: dict) -> Optional[Tuple[str, int]]:
         """
         Shortcut for logic flow of schema validation when handling requests.
 
@@ -768,7 +951,14 @@ def create_app(test_overrides=None, test_inst_path=None):
         return err
 
     def _debug_variable(name: str, v, include_type=False, private=False):
-        """Send a variable's name and value to the given logger."""
+        """
+        Send a variable's name and value to the given logger.
+
+        :param name: The name of the variable to display in the logger
+        :param v: The value of the variable
+        :param include_type: Whether to include the type() of the variable
+        :param private: Whether to redact the value when configured
+        """
         if private:
             val = _get_private_data_string(v)
         else:

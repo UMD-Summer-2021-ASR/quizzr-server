@@ -4,7 +4,7 @@ import os
 import random
 from copy import deepcopy
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Optional
 from secrets import token_urlsafe
 
 import pymongo
@@ -14,6 +14,7 @@ from pymongo.database import Database
 
 import firebase_admin
 from firebase_admin import credentials, storage
+from pymongo.results import InsertManyResult
 
 from sv_api import QuizzrAPISpec
 from sv_errors import UsernameTakenError, ProfileNotFoundError, MalformedProfileError
@@ -25,7 +26,7 @@ class QuizzrTPM:
 
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name, app_config, secret_dir, rec_dir, api: QuizzrAPISpec):
+    def __init__(self, database_name: str, app_config: dict, secret_dir: str, rec_dir: str, api: QuizzrAPISpec):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
         self.app_config = app_config
 
@@ -53,9 +54,14 @@ class QuizzrTPM:
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         self.user_ids = self.get_ids(self.users)
 
-    def update_processed_audio(self, arguments: Dict[str, Any]):
-        """Attach the given arguments to one unprocessed audio document and move it to the Audio collection.
-        Additionally, update the recording history of the associated question and user."""
+    def update_processed_audio(self, arguments: Dict[str, Any]) -> List[Tuple[str, str]]:
+        """
+        Attach the given arguments to one unprocessed audio document and move it to the Audio collection. Additionally,
+        update the recording history of the associated question and user.
+
+        :param arguments: The _id of the audio document to update along with the fields to add to it
+        :return: A list of tuples each containing an error type and the cause.
+        """
         errs = []
         logging.debug(f"arguments = {arguments!r}")
         logging.debug("Retrieving arguments...")
@@ -85,7 +91,7 @@ class QuizzrTPM:
         qid = audio_doc.get("qb_id")
         sid = audio_doc.get("sentenceId")
 
-        err = self.add_rec_to_question(qid, sid, rec_doc)
+        err = self.add_rec_to_question(qid, rec_doc, sid)
         if err:
             errs.append(err)
 
@@ -96,7 +102,15 @@ class QuizzrTPM:
 
         return errs
 
-    def add_rec_to_question(self, qid, sid, rec_doc):
+    def add_rec_to_question(self, qid: int, rec_doc: dict, sid: int = None) -> Tuple[str, str]:
+        """
+        Append a recording document to the "recordedAudios" field of a question
+
+        :param qid: The ID of the question
+        :param rec_doc: The recording document to append. Should contain the audio ID and recording type
+        :param sid: (optional) The ID of the sentence. Use for segmented questions.
+        :return: A tuple containing the error type and reason, or None if no error occurred.
+        """
         if qid is None:
             logging.warning("Missing question ID. Skipping")
             return "internal_error", "undefined_question_id"
@@ -125,7 +139,7 @@ class QuizzrTPM:
                 logging.warning(f"Could not update question with ID {qid}")
                 return "internal_error", "question_update_failure"
 
-    def add_rec_to_user(self, user_id, rec_doc):
+    def add_rec_to_user(self, user_id: str, rec_doc: dict) -> Optional[Tuple[str, str]]:
         """
         Push one recording document to the "recordedAudios" field of one user.
 
@@ -170,7 +184,12 @@ class QuizzrTPM:
         return errs
 
     def get_file_blob(self, blob_path: str):
-        """Retrieve a file from Firebase Storage and store it in-memory."""
+        """
+        Retrieve a file from Firebase Storage and store it in-memory.
+
+        :param blob_path: The canonical blob name
+        :return: An in-memory bytes buffer handler for the file
+        """
         blob_name = "/".join([self.app_config["BLOB_ROOT"], blob_path])
         logging.debug(f"blob_name = {blob_name!r}")
         blob = self.bucket.blob(blob_name)
@@ -178,9 +197,21 @@ class QuizzrTPM:
         fh = io.BytesIO(file_bytes)
         return fh
 
-    def find_best_audio_doc(self, recordings, required_fields=None, optional_fields=None, excluded_fields=None):
-        """Find and return the (processed) audio document with the best evaluation, applying a given projection."""
-        query = {"_id": {"$in": [rec["id"] for rec in recordings]}, "version": self.app_config["VERSION"]}
+    def find_best_audio_doc(self,
+                            id_list: List[str],
+                            required_fields: List[str] = None,
+                            optional_fields: List[str] = None,
+                            excluded_fields: List[str] = None) -> Optional[dict]:
+        """
+        Find and return the (processed) audio document with the best evaluation, applying a given projection.
+
+        :param id_list: The list of IDs to query by
+        :param required_fields: The fields that must be included in the audio document.
+        :param optional_fields: The fields to include if present.
+        :param excluded_fields: The fields to omit
+        :return: The audio document with the best evaluation with the given projection applied.
+        """
+        query = {"_id": {"$in": id_list}, "version": self.app_config["VERSION"]}
         if self.audio.count_documents(query) == 0:
             logging.error("No audio documents found")
             return
@@ -211,7 +242,14 @@ class QuizzrTPM:
         logging.error("Failed to find a viable audio document")
 
     def find_questions(self, qids: list = None, **kwargs):
-        """Generator function for getting questions from both collections."""
+        """
+        Generator function for getting questions from both collections.
+
+        :param qids: The list of question IDs to search through.
+        :param kwargs: Pass in any additional arguments for the find() function.
+        :return: A generator that can be iterated through to get each result from UnrecordedQuestions and
+                 RecordedQuestions.
+        """
         kwargs_c = deepcopy(kwargs)
 
         # Overrides _id argument in filter.
@@ -246,12 +284,35 @@ class QuizzrTPM:
             yield question
         logging.info(f"Found {rec_count} recorded question(s)")
 
-    def pick_random_question(self, collection_name, question_ids, required_fields):
-        """Pick a random question from a list of question IDs and find it."""
+    def pick_random_question(self,
+                             collection_name: str,
+                             question_ids: List[int],
+                             required_fields: List[str]):
+        """
+        Pick a random question from a list of question IDs and find it. Alias for pick_random_questions without a
+        batch_size argument.
+
+        :param collection_name: The name of the collection to retrieve the question from
+        :param question_ids: The list of question IDs to select from
+        :param required_fields: Require these fields to be present in the returned document.
+        :return: A randomly selected question
+        """
         return self.pick_random_questions(collection_name, question_ids, required_fields)
 
-    def pick_random_questions(self, collection_name, question_ids, required_fields, batch_size=1):
-        """Search for multiple questions from a shuffled list of question IDs."""
+    def pick_random_questions(self,
+                              collection_name: str,
+                              question_ids: List[int],
+                              required_fields: List[str],
+                              batch_size: int = 1):
+        """
+        Search for multiple questions from a shuffled list of question IDs.
+
+        :param collection_name: The name of the collection to retrieve the questions from
+        :param question_ids: The list of question IDs to select from
+        :param required_fields: Require these fields to be present in the returned documents.
+        :param batch_size: The number of questions to retrieve
+        :return: A list of randomly selected questions
+        """
         qids_pool = question_ids.copy()
         random.shuffle(qids_pool)
         next_batch_size = batch_size
@@ -341,7 +402,13 @@ class QuizzrTPM:
         return results
 
     def upload_many(self, file_paths: List[str], subdir: str) -> Dict[str, str]:
-        """Upload multiple audio files to Firebase Cloud Storage."""
+        """
+        Upload multiple audio files to Firebase Cloud Storage, located at <BLOB_ROOT>/<subdir>/.
+
+        :param file_paths: The paths of the files to upload
+        :param subdir: The subdirectory to put the files in
+        :return: A dictionary mapping file names to blob names
+        """
         # TODO: Actual BrokenPipeError handling
         file2blob = {}
 
@@ -359,11 +426,23 @@ class QuizzrTPM:
         return file2blob
 
     def get_blob_path(self, blob_name: str, subdir: str) -> str:
-        """Get the canonical name of a blob, which is <BLOB_ROOT>/<subdir>/<blob_name>"""
+        """
+        Form a path from a base name in the format <BLOB_ROOT>/<subdir>/<blob_name>.
+
+        :param blob_name: The base name of the blob
+        :param subdir: The directory/ies to put the file in
+        :return: A blob "path"
+        """
         return "/".join([self.app_config["BLOB_ROOT"], subdir, blob_name])
 
     def upload_one(self, file_path: str, subdir: str) -> str:
-        """Upload one audio file to Firebase Cloud Storage."""
+        """
+        Upload one audio file to Firebase Cloud Storage.
+
+        :param file_path: The path of the file to upload
+        :param subdir: The subdirectory to put the file in
+        :return: The name of the resulting blob
+        """
         # TODO: Actual BrokenPipeError handling
         file_name = os.path.basename(file_path)
         return self.upload_many([file_path], subdir)[file_name]
@@ -372,8 +451,17 @@ class QuizzrTPM:
             self,
             sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
-            sub2vtt: Dict[str, str]):
-        """Upload submission metadata to MongoDB. Excludes any fields in sub2meta that start with '__'."""
+            sub2vtt: Dict[str, str]) -> Tuple[InsertManyResult, InsertManyResult]:
+        """
+        Upload submission metadata to MongoDB.
+
+        :param sub2blob: A dictionary mapping submissions to blob names
+        :param sub2meta: A dictionary mapping submissions to metadata to use. Fields that start with '__' are not
+                         included.
+        :param sub2vtt: A dictionary mapping submissions to VTTs.
+        :return: A tuple containing the results from inserting to the Audio and UnprocessedAudio collections
+                 respectively.
+        """
         processing_list = ["normal"]
         unproc_audio_batch = []
         audio_batch = []
@@ -419,7 +507,7 @@ class QuizzrTPM:
         return unproc_results, proc_results
 
     @staticmethod
-    def get_ids(collection, query=None):
+    def get_ids(collection: pymongo.collection.Collection, query: dict = None) -> list:
         """
         Return a list of all document IDs based on a query.
 
@@ -434,9 +522,15 @@ class QuizzrTPM:
         return ids
 
     @staticmethod
-    def get_difficulty_query_op(difficulty_limits: list, difficulty):
-        """Given the list of difficulty limits and a difficulty type, return the boundaries as a MongoDB filter
-        operator."""
+    def get_difficulty_query_op(difficulty_limits: list, difficulty: int) -> dict:
+        """
+        Given the list of difficulty limits and a difficulty type, return the boundaries as a MongoDB filter
+        operator.
+
+        :param difficulty_limits: The upper bound for each difficulty level
+        :param difficulty: The difficulty level to choose.
+        :return: The boundaries as a MongoDB filter operator
+        """
         lower_bound = difficulty_limits[difficulty - 1] + 1 if difficulty > 0 else None
         upper_bound = difficulty_limits[difficulty]
         query_op = {}
@@ -446,7 +540,7 @@ class QuizzrTPM:
             query_op["$lte"] = upper_bound
         return query_op
 
-    def get_profile(self, user_id: str, visibility: str):
+    def get_profile(self, user_id: str, visibility: str) -> Optional[dict]:
         """
         Retrieve a User document from the associated MongoDB collection
 
@@ -491,7 +585,7 @@ class QuizzrTPM:
             raise UsernameTakenError(username)
         return self.users.update_one({"_id": user_id}, {"$set": update_args})
 
-    def delete_profile(self, user_id):
+    def delete_profile(self, user_id: str):
         """
         Delete a user profile
 
@@ -500,7 +594,7 @@ class QuizzrTPM:
         """
         return self.users.delete_one({"_id": user_id})
 
-    def get_user_role(self, user_id):
+    def get_user_role(self, user_id: str) -> str:
         """
         Get the permission level of the user associated with the given ID
 
