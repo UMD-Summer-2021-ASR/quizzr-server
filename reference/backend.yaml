@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.4.1
+  version: 0.4.2
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -265,7 +265,10 @@ paths:
                 qid:
                   $ref: '#/components/schemas/Str-ObjectId'
                 recType:
-                  $ref: '#/components/schemas/Rec-Type'
+                  type: string
+                  enum:
+                    - normal
+                    - buzz
                 diarMetadata:
                   type: string
               required:
@@ -597,6 +600,7 @@ paths:
                                 $ref: '#/components/schemas/VTT'
                             required:
                               - id
+                              - sentenceId
                               - gentleVtt
                               - vtt
                       required:
@@ -767,6 +771,7 @@ paths:
                         description: 'A value returned from the bag-of-words-test (see https://github.com/UMD-Summer-2021-ASR/bag-of-words-test).'
                     required:
                       - qb_id
+                      - sentenceId
                       - transcript
                       - answer
                       - recDifficulty
@@ -860,6 +865,8 @@ paths:
         - internal
         - qb-pipeline
       responses:
+        '200':
+          description: OK
         '401':
           description: Unauthorized
         '404':
@@ -875,8 +882,64 @@ paths:
           application/json:
             schema:
               type: object
-              properties: {}
-        description: Not implemented yet
+              properties:
+                mode:
+                  type: string
+                  description: The gamemode for this session
+                  enum:
+                    - casual
+                    - competitive
+                category:
+                  type: string
+                  description: The subject category for this session
+                users:
+                  type: object
+                  required:
+                    - <username>
+                  properties:
+                    <username>:
+                      type: object
+                      required:
+                        - questionStats
+                        - finished
+                        - won
+                      properties:
+                        questionStats:
+                          type: object
+                          required:
+                            - played
+                            - buzzed
+                            - correct
+                            - cumulativeProgressOnBuzz
+                          properties:
+                            played:
+                              type: integer
+                            buzzed:
+                              type: integer
+                            correct:
+                              type: integer
+                            cumulativeProgressOnBuzz:
+                              type: object
+                              description: The cumulative amount of progress through the question when the player buzzes in.
+                              required:
+                                - percentQuestionRead
+                                - numSentences
+                              properties:
+                                percentQuestionRead:
+                                  type: number
+                                numSentences:
+                                  type: number
+                        finished:
+                          type: boolean
+                          description: Whether the user finished playing this session
+                        won:
+                          type: boolean
+                          description: ''
+              required:
+                - mode
+                - category
+                - users
+        description: 'A document containing the results of the session. '
       parameters: []
       security:
         - Internal-Auth: []
@@ -974,7 +1037,6 @@ components:
       enum:
         - normal
         - buzz
-        - answer
       examples:
         - normal
         - ''
