@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import pprint
 from copy import deepcopy
 from sys import exit
 from datetime import datetime
@@ -132,6 +133,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         app_conf["SUBMISSION_FILE_TYPES"]
     )
     socket_server_key = {}
+
+    pprinter = pprint.PrettyPrinter()
     # TODO: multiprocessing
 
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
@@ -474,19 +477,39 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         Update the database with the results of a game session.
         Precondition: session_results["questionStats"]["played"] != 0
         """
-        if request.headers.get("Authorization") != socket_server_key["value"]:
+        secret_key_arg = request.headers.get("Authorization")
+        _debug_variable("secret_key_arg", secret_key_arg, private=True)
+        if secret_key_arg != socket_server_key["value"]:
+            app.logger.info("Secret key does not match. Access to resource denied")
             abort(HTTPStatus.UNAUTHORIZED)
+        app.logger.info("Access to resource granted")
         session_results = request.get_json()
+        _debug_variable("session_results", session_results)
+        if "category" in session_results:
+            return handle_game_results_category(session_results)
+        if "categories" in session_results:
+            return handle_game_results_categories(session_results)
+        return {
+            "err": "Arguments 'category' or 'categories' not provided",
+            "err_id": "undefined_args",
+            "extra": ["category_or_categories"]
+        }, HTTPStatus.BAD_REQUEST
+
+    def handle_game_results_category(session_results):
         mode = session_results["mode"]
         category = session_results["category"]
         user_results = session_results["users"]
         update_batch = []
+        app.logger.info(f"Processing updates for {len(session_results['users'])} users...")
         for username, update_args in user_results.items():
+            app.logger.info(f"Finding user profile with username '{username}'...")
             user_doc = qtpm.users.find_one({"username": username})
             if "stats" not in user_doc:
+                app.logger.debug("Creating stub for field 'stats'...")
                 user_doc["stats"] = {}
 
             if mode not in user_doc["stats"]:
+                app.logger.debug(f"Creating stub for mode '{mode}'...")
                 user_doc["stats"][mode] = {
                     "questions": {
                         "played": {"all": 0},
@@ -501,29 +524,46 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                     }
                 }
 
+            _debug_variable(f"user.stats.{mode}", user_doc["stats"][mode])
+
             old_question_stats = user_doc["stats"][mode]["questions"]
 
             for field in ["played", "buzzed", "correct"]:
                 if category not in old_question_stats[field]:
+                    app.logger.debug(f"Set default value for field '{field}', category '{category}'")
                     old_question_stats[field][category] = 0
 
             old_game_stats = user_doc["stats"][mode]["game"]
 
             for field in ["played", "won"]:
                 if category not in old_game_stats[field]:
+                    app.logger.debug(f"Set default value for field '{field}', category '{category}'")
                     old_game_stats[field][category] = 0
 
             question_stats = update_args["questionStats"]
+
+            app.logger.info("Retrieving projected results...")
 
             played_all = old_question_stats["played"]["all"] + question_stats["played"]
             played_categorical = old_question_stats["played"][category] + question_stats["played"]
             buzzed_all = old_question_stats["buzzed"]["all"] + question_stats["buzzed"]
             buzzed_categorical = old_question_stats["buzzed"][category] + question_stats["buzzed"]
 
+            _debug_variable("total_questions_played", played_all)
+            _debug_variable("total_buzzes", buzzed_all)
+            _debug_variable("categorical_questions_played", played_categorical)
+            _debug_variable("categorical_buzzes", buzzed_categorical)
+
+            app.logger.info("Projected results retrieved")
+
             old_c_progress_on_buzz = old_question_stats["cumulativeProgressOnBuzz"]
             c_progress_on_buzz = question_stats["cumulativeProgressOnBuzz"]
 
             old_avg_progress_on_buzz = old_question_stats["avgProgressOnBuzz"]
+
+            _debug_variable("old_avg_progress_on_buzz", old_avg_progress_on_buzz)
+            app.logger.info("Calculating derived statistics...")
+
             avg_progress_on_buzz_update = {}
             for k in c_progress_on_buzz.keys():
                 if k not in old_c_progress_on_buzz:
@@ -539,21 +579,31 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
 
             avg_progress_on_buzz = deepcopy(old_avg_progress_on_buzz)
             sv_util.deep_update(avg_progress_on_buzz, avg_progress_on_buzz_update)
+
+            _debug_variable("avg_progress_on_buzz", avg_progress_on_buzz)
+
             buzz_rate = {
                 "all": buzzed_all / played_all,
                 category: buzzed_categorical / played_categorical
             }
 
+            _debug_variable("buzz_rate.all", buzz_rate["all"])
+            _debug_variable(f"buzz_rate.{category}", buzz_rate[category])
+
             buzz_accuracy = {}
             if buzzed_all == 0:
+                app.logger.debug("Number of total buzz-ins is 0. Skipping accuracy calculation")
                 buzz_accuracy["all"] = None
             else:
                 buzz_accuracy["all"] = (old_question_stats["correct"]["all"] + question_stats["correct"]) / buzzed_all
+                _debug_variable("buzz_accuracy.all", buzz_accuracy["all"])
             if buzzed_categorical == 0:
+                app.logger.debug("Number of categorical buzz-ins is 0. Skipping accuracy calculation")
                 buzz_accuracy[category] = None
             else:
-                buzz_accuracy[category] = (old_question_stats["correct"][category] + question_stats["correct"])\
+                buzz_accuracy[category] = (old_question_stats["correct"][category] + question_stats["correct"]) \
                                           / buzzed_categorical
+                _debug_variable(f"buzz_accuracy.{category}", buzz_accuracy[category])
 
             win_rate = {
                 "all": (old_game_stats["won"]["all"] + int(update_args["won"]))
@@ -561,6 +611,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 category: (old_game_stats["won"][category] + int(update_args["won"]))
                 / (old_game_stats["played"][category] + 1)
             }
+
+            _debug_variable(f"win_rate.all", win_rate["all"])
+            _debug_variable(f"win_rate.{category}", win_rate[category])
+
+            app.logger.info("Calculated derived statistics")
 
             stats_index = f"stats.{mode}"
             q_index = f"{stats_index}.questions"
@@ -571,7 +626,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                     f"{q_index}.played.all": question_stats["played"],
                     f"{q_index}.buzzed.all": question_stats["buzzed"],
                     f"{q_index}.correct.all": question_stats["correct"],
-                    f"{q_index}.cumulativeProgressOnBuzz.percentQuestionRead.all": c_progress_on_buzz["percentQuestionRead"],
+                    f"{q_index}.cumulativeProgressOnBuzz.percentQuestionRead.all": c_progress_on_buzz[
+                        "percentQuestionRead"],
                     f"{q_index}.cumulativeProgressOnBuzz.numSentences.all": c_progress_on_buzz["numSentences"],
 
                     f"{g_index}.played.all": 1,
@@ -581,7 +637,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                     f"{q_index}.played.{category}": question_stats["played"],
                     f"{q_index}.buzzed.{category}": question_stats["buzzed"],
                     f"{q_index}.correct.{category}": question_stats["correct"],
-                    f"{q_index}.cumulativeProgressOnBuzz.percentQuestionRead.{category}": c_progress_on_buzz["percentQuestionRead"],
+                    f"{q_index}.cumulativeProgressOnBuzz.percentQuestionRead.{category}": c_progress_on_buzz[
+                        "percentQuestionRead"],
                     f"{q_index}.cumulativeProgressOnBuzz.numSentences.{category}": c_progress_on_buzz["numSentences"],
 
                     f"{g_index}.played.{category}": 1,
@@ -602,8 +659,194 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 }
             }
             update_batch.append(UpdateOne({"username": username}, processed_update_args))
+        app.logger.info("Sending bulk write operation...")
         results = qtpm.users.bulk_write(update_batch)
-        return {"updateSuccessful": results.matched_count == len(session_results["users"])}
+        app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
+        app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
+        return {"successful": results.matched_count, "requested": len(session_results["users"])}
+
+    def handle_game_results_categories(session_results):
+        mode = session_results["mode"]
+        categories = session_results["categories"]
+        user_results = session_results["users"]
+        update_batch = []
+
+        for username, update_args in user_results.items():
+            app.logger.info(f"Finding user profile with username '{username}'...")
+            user_doc = qtpm.users.find_one({"username": username})
+
+            if "stats" not in user_doc:
+                app.logger.debug("Creating stub for field 'stats'...")
+                user_doc["stats"] = {}
+
+            if mode not in user_doc["stats"]:
+                app.logger.debug(f"Creating stub for mode '{mode}'...")
+                user_doc["stats"][mode] = {
+                    "questions": {
+                        "played": {"all": 0},
+                        "buzzed": {"all": 0},
+                        "correct": {"all": 0},
+                        "cumulativeProgressOnBuzz": {},
+                        "avgProgressOnBuzz": {}
+                    },
+                    "game": {
+                        "played": {"all": 0},
+                        "won": {"all": 0}
+                    }
+                }
+
+            _debug_variable(f"user.stats.{mode}", user_doc["stats"][mode])
+
+            old_question_stats = user_doc["stats"][mode]["questions"]
+            old_game_stats = user_doc["stats"][mode]["game"]
+            _debug_variable("old_question_stats", old_question_stats)
+            _debug_variable("old_game_stats", old_game_stats)
+
+            for field in ["played", "won"]:
+                for category in categories:
+                    if category not in old_game_stats[field]:
+                        app.logger.debug(f"Set default value for field '{field}', category '{category}' in game stats")
+                        old_game_stats[field][category] = 0
+
+            question_stats = update_args["questionStats"]
+
+            for field in ["played", "buzzed", "correct"]:
+                for category in question_stats[field]:
+                    if category not in old_question_stats[field]:
+                        app.logger.debug(f"Set default value for field '{field}', category '{category}', in question "
+                                         "stats")
+                        old_question_stats[field][category] = 0
+
+            stats_index = f"stats.{mode}"
+            q_index = f"{stats_index}.questions"
+            g_index = f"{stats_index}.game"
+
+            processed_update_args = {"$inc": {}, "$set": {}}
+            # Get totals for the played, buzzed, and correct fields while also adding $inc arguments.
+            totals = {}
+            for field in ["played", "buzzed", "correct"]:
+                app.logger.info(f"Adding incrementation arguments for field '{field}' in question stats...")
+                total_value = 0
+                for category, value in question_stats[field].items():
+                    _debug_variable("category", category)
+                    field_path = f"{q_index}.{field}.{category}"
+                    processed_update_args["$inc"][field_path] = value
+                    total_value += value
+                processed_update_args["$inc"][f"{q_index}.{field}.all"] = total_value
+                totals[field] = total_value
+                app.logger.info(f"Successfully added incrementation arguments for field '{field}' in question stats")
+
+            app.logger.info("Adding incrementation arguments for fields in game stats...")
+            for category in categories:
+                _debug_variable("category", category)
+                processed_update_args["$inc"][f"{g_index}.played.{category}"] = 1
+                processed_update_args["$inc"][f"{g_index}.finished.{category}"] = int(update_args["finished"])
+                processed_update_args["$inc"][f"{g_index}.won.{category}"] = int(update_args["won"])
+
+            processed_update_args["$inc"][f"{g_index}.played.all"] = 1
+            processed_update_args["$inc"][f"{g_index}.finished.all"] = int(update_args["finished"])
+            processed_update_args["$inc"][f"{g_index}.won.all"] = int(update_args["won"])
+            app.logger.info("Successfully added incrementation arguments for fields in game stats")
+
+            # Add to cumulativeProgressOnBuzz fields and calculate avgProgressOnBuzz fields
+            app.logger.info("Calculating average stats on buzz timings...")
+            for field, categorical_values in question_stats["cumulativeProgressOnBuzz"].items():
+                _debug_variable(f"cumulativeProgressOnBuzz.{field}", categorical_values)
+                total_value = 0
+                if field not in old_question_stats["cumulativeProgressOnBuzz"]:
+                    old_question_stats["cumulativeProgressOnBuzz"][field] = {}
+
+                old_categorical_values = old_question_stats["cumulativeProgressOnBuzz"][field]
+                _debug_variable("old_categorical_values", old_categorical_values)
+
+                for category, value in categorical_values.items():
+                    if category not in old_categorical_values:
+                        old_categorical_values[category] = 0
+                    field_path = f"{q_index}.cumulativeProgressOnBuzz.{field}.{category}"
+                    processed_update_args["$inc"][field_path] = value
+                    avg_field_path = f"{q_index}.avgProgressOnBuzz.{field}.{category}"
+                    projected_value = value + old_categorical_values[category]
+                    projected_n_played = old_question_stats["played"][category] + question_stats["played"][category]
+                    if projected_n_played == 0:
+                        projected_average = None
+                    else:
+                        projected_average = projected_value / projected_n_played
+                    processed_update_args["$set"][avg_field_path] = projected_average
+                    total_value += value
+
+                if "all" not in old_categorical_values:
+                    old_categorical_values["all"] = 0
+                processed_update_args["$inc"][f"{q_index}.cumulativeProgressOnBuzz.{field}.all"] = total_value
+                total_projected_value = total_value + old_categorical_values["all"]
+                total_projected_n_played = old_question_stats["played"]["all"] + totals["played"]
+                if total_projected_n_played == 0:
+                    total_projected_average = None
+                else:
+                    total_projected_average = total_projected_value / total_projected_n_played
+                processed_update_args["$set"][f"{q_index}.avgProgressOnBuzz.{field}.all"] = total_projected_average
+            app.logger.info("Successfully calculated average stats on buzz timings")
+
+            # Calculate derived question statistics
+            app.logger.info("Calculating derived question statistics...")
+            for category in question_stats["played"]:
+                projected_played = old_question_stats["played"][category] + question_stats["played"][category]
+                projected_buzzed = old_question_stats["buzzed"][category] + question_stats["buzzed"][category]
+                projected_correct = old_question_stats["correct"][category] + question_stats["correct"][category]
+
+                if projected_played == 0:
+                    buzz_rate = None
+                else:
+                    buzz_rate = projected_buzzed / projected_played
+
+                if projected_buzzed == 0:
+                    buzz_accuracy = None
+                else:
+                    buzz_accuracy = projected_correct / projected_buzzed
+
+                processed_update_args["$set"][f"{q_index}.buzzRate.{category}"] = buzz_rate
+                processed_update_args["$set"][f"{q_index}.buzzAccuracy.{category}"] = buzz_accuracy
+
+            projected_played = old_question_stats["played"]["all"] + totals["played"]
+            projected_buzzed = old_question_stats["buzzed"]["all"] + totals["buzzed"]
+            projected_correct = old_question_stats["correct"]["all"] + totals["correct"]
+
+            if projected_played == 0:
+                buzz_rate = None
+            else:
+                buzz_rate = projected_buzzed / projected_played
+
+            if projected_buzzed == 0:
+                buzz_accuracy = None
+            else:
+                buzz_accuracy = projected_correct / projected_buzzed
+
+            processed_update_args["$set"][f"{q_index}.buzzRate.all"] = buzz_rate
+            processed_update_args["$set"][f"{q_index}.buzzAccuracy.all"] = buzz_accuracy
+            app.logger.info("Successfully calculated derived question statistics")
+
+            # Calculate win rate for each category
+            app.logger.info("Calculating win rates...")
+            for category in categories:
+                projected_won = old_game_stats["won"][category] + int(update_args["won"])
+                projected_played = old_game_stats["played"][category] + 1
+                win_rate = projected_won / projected_played
+                processed_update_args["$set"][f"{g_index}.winRate.{category}"] = win_rate
+
+            projected_won = old_game_stats["won"]["all"] + int(update_args["won"])
+            projected_played = old_game_stats["played"]["all"] + 1
+            win_rate = projected_won / projected_played
+            processed_update_args["$set"][f"{g_index}.winRate.all"] = win_rate
+            app.logger.info("Successfully calculated win rates")
+
+            _debug_variable(f"processed_update_args.{username}", processed_update_args)
+
+            update_batch.append(UpdateOne({"username": username}, processed_update_args))
+        _debug_variable("update_batch", update_batch)
+        app.logger.info("Sending bulk write operation...")
+        results = qtpm.users.bulk_write(update_batch)
+        app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
+        app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
+        return {"successful": results.matched_count, "requested": len(session_results["users"])}
 
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
@@ -725,9 +968,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         #         app.logger.error("Failed to find a viable recorded question. Aborting")
         #         return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
         # return {"results": audios}
+        categories = request.args.getlist("category")
         batch_size = int(request.args.get("batchSize") or 1)
-        cursor = qtpm.rec_questions.aggregate([
-            {'$group': {'_id': '$qb_id'}},
+        pipeline = [
+            {'$group': {'_id': '$qb_id', 'category': {'$first': '$category'}}},
             {'$sample': {'size': batch_size}},
             {'$lookup': {
                 'from': 'Audio',
@@ -760,7 +1004,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                     {'$replaceRoot': {'newRoot': '$audio'}}
                 ]
             }}
-        ])
+        ]
+        if categories:
+            pipeline.insert(0, {'$match': {'category': {'$in': categories}}})
+        cursor = qtpm.rec_questions.aggregate(pipeline)
         questions = []
         for doc in cursor:
             doc["qb_id"] = doc.pop("_id")
@@ -878,8 +1125,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         app.logger.info("Retrieving ID token from header 'Authorization'...")
         id_token = request.headers.get("Authorization")
 
-        id_token_log = _get_private_data_string(id_token)
-        app.logger.debug(f"id_token = {id_token_log}")
+        _debug_variable("id_token", id_token, private=True)
 
         if app.config["TESTING"] and not app.config["USE_ID_TOKENS"] and id_token:
             return {"uid": id_token}
@@ -967,6 +1213,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             prefix = f"{type(v)} "
         else:
             prefix = ""
-        app.logger.debug(f"{prefix}{name} = {val!r}")
+        val_pp = pprinter.pformat(val)
+        app.logger.debug(f"{prefix}{name} = {val_pp}")
 
     return app

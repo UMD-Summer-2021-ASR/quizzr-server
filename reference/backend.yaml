@@ -585,6 +585,8 @@ paths:
                       properties:
                         qb_id:
                           $ref: '#/components/schemas/QB-ID'
+                        category:
+                          type: string
                         audio:
                           type: array
                           items:
@@ -600,11 +602,11 @@ paths:
                                 $ref: '#/components/schemas/VTT'
                             required:
                               - id
-                              - sentenceId
                               - gentleVtt
                               - vtt
                       required:
                         - qb_id
+                        - category
                         - audio
                 required:
                   - results
