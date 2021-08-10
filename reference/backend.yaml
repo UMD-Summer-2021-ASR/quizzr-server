@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.4.3
+  version: 0.4.4
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -342,7 +342,9 @@ paths:
                       - 0
                     username: John Doe
                     usernameSpecs: ''
-                    rating: 0
+                    ratings:
+                      all: 1
+                      literature: 1
                     totalQuestionsPlayed: 0
                     totalGames: 0
                     coins: 0
@@ -615,6 +617,7 @@ paths:
                   value:
                     results:
                       - qb_id: 0
+                        category: literature
                         audio:
                           - id: aj1zL3A2Un3s23LJDA-tpeCnKQe0euXDsgWQVpzHjVg
                             sentenceId: 0
@@ -678,6 +681,11 @@ paths:
           in: query
           name: category
           description: The category/ies to include. Specify this parameter multiple times to include multiple categories. Does not filter by category if none is specified
+        - schema:
+            type: array
+          in: query
+          name: difficultyRange
+          description: The range of difficulties to select
       security:
         - Firebase-Auth: []
   /question/unrec:
@@ -1046,6 +1054,37 @@ paths:
       security:
         - Internal-Auth: []
     parameters: []
+  /leaderboard:
+    get:
+      summary: Get Leaderboard
+      tags:
+        - frontend
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Basic-Profile'
+      operationId: get_leaderboard
+      description: Get the leaderboard of users who participated in ranked games
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: category
+          description: The subject category to filter by
+        - schema:
+            type: integer
+            maximum: 200
+          in: query
+          name: size
+          description: Display the top `<size>` players
 components:
   schemas:
     Audio-Id:
@@ -1173,7 +1212,9 @@ components:
             - 0
           username: John Doe
           usernameSpecs: ''
-          rating: 0
+          ratings:
+            all: 0
+            literature: 0
           totalQuestionsPlayed: 0
           totalGames: 0
           coins: 0
@@ -1190,7 +1231,7 @@ components:
           pfp: []
           username: ''
           usernameSpecs: ''
-          rating: 0
+          ratings: {}
           totalQuestionsPlayed: 0
           totalGames: 0
           coins: 0
@@ -1209,8 +1250,8 @@ components:
           $ref: '#/components/schemas/Username'
         usernameSpecs:
           $ref: '#/components/schemas/Username-Specs'
-        rating:
-          type: integer
+        ratings:
+          $ref: '#/components/schemas/Game-Ratings'
         totalQuestionsPlayed:
           type: integer
         totalGames:
@@ -1241,7 +1282,7 @@ components:
         - pfp
         - username
         - usernameSpecs
-        - rating
+        - ratings
         - totalQuestionsPlayed
         - totalGames
         - coins
@@ -1313,6 +1354,38 @@ components:
         err_id:
           type: string
           description: A machine-readable form of the error message
+        extra:
+          type: array
+          items: {}
+      required:
+        - err
+        - err_id
+    Game-Ratings:
+      title: Game-Ratings
+      type: object
+      description: 'The user''s ratings in competitive play, per category'
+      properties:
+        <category>:
+          type: number
+    Basic-Profile:
+      title: Basic-Profile
+      type: object
+      description: The basic profile of a user
+      properties:
+        username:
+          $ref: '#/components/schemas/Username'
+        usernameSpecs:
+          $ref: '#/components/schemas/Username-Specs'
+        pfp:
+          $ref: '#/components/schemas/PFP-Specs'
+        rating:
+          type: integer
+      examples:
+        - username: John Doe
+          usernameSpecs: ''
+          pfp:
+            - 0
+          rating: 0
   parameters:
     BlobPath:
       name: blob_path
