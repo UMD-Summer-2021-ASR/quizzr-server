@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.4.4
+  version: 0.4.5
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -710,20 +710,51 @@ paths:
                       type: object
                       properties:
                         id:
-                          $ref: '#/components/schemas/Str-ObjectId'
+                          $ref: '#/components/schemas/QB-ID'
                         transcript:
                           type: string
+                        tokenizations:
+                          type: array
+                          description: A list of slice indices for each sentence
+                          items:
+                            type: array
+                            items:
+                              type: integer
+                        sentenceId:
+                          type: integer
                       required:
                         - id
                         - transcript
+                        - tokenizations
                 required:
                   - results
               examples:
                 example-1:
                   value:
                     results:
-                      - id: 9174ea6cb092348d950a2f65
+                      - id: 12345678
                         transcript: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ultrices sagittis orci a scelerisque purus. Vehicula ipsum a arcu cursus. Dis parturient montes nascetur ridiculus mus mauris vitae ultricies leo. In dictum non consectetur a erat nam at lectus. At augue eget arcu dictum. Bibendum neque egestas congue quisque egestas diam in arcu. Eget nullam non nisi est. Praesent elementum facilisis leo vel fringilla est ullamcorper. Aliquet risus feugiat in ante.'
+                        tokenizations:
+                          - - 0
+                            - 123
+                          - - 124
+                            - 167
+                          - - 168
+                            - 197
+                          - - 198
+                            - 270
+                          - - 271
+                            - 318
+                          - - 319
+                            - 345
+                          - - 346
+                            - 405
+                          - - 406
+                            - 431
+                          - - 432
+                            - 495
+                          - - 496
+                            - 526
         '404':
           description: Question Not Found
       operationId: pick_recording_question
