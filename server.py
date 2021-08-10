@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import pprint
+import re
 from copy import deepcopy
 from sys import exit
 from datetime import datetime
@@ -87,7 +88,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 "collection": "Users"
             }
         },
-        "USE_ID_TOKENS": True
+        "USE_ID_TOKENS": True,
+        "MAX_LEADERBOARD_SIZE": 200,  # The maximum number of entries allowable on the leaderboard.
+        "DEFAULT_LEADERBOARD_SIZE": 10  # The default number of entries on the leaderboard.
     }
 
     config_dir = os.path.join(path, "config")
@@ -121,6 +124,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     api = QuizzrAPISpec(os.path.join(server_dir, "reference", "backend.yaml"))
 
     app.config.from_mapping(app_conf)
+    if app.config["DEFAULT_LEADERBOARD_SIZE"] > app.config["MAX_LEADERBOARD_SIZE"]:
+        app.logger.critical("Configured default leaderboard size must not exceed maximum leaderboard size.")
     app.logger.info("Initializing third-party services...")
     app.logger.info(f"MongoDB Database Name = '{app_conf['DATABASE']}'")
     app.logger.info(f"Firebase Blob Root = '{app_conf['BLOB_ROOT']}'")
@@ -848,6 +853,26 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
         return {"successful": results.matched_count, "requested": len(session_results["users"])}
 
+    @app.route("/leaderboard", methods=["GET"])
+    def get_leaderboard():
+        category = request.args.get("category") or "all"
+        arg_size = request.args.get("size")
+        size = arg_size or app.config["DEFAULT_LEADERBOARD_SIZE"]
+        if size > app.config["MAX_LEADERBOARD_SIZE"]:
+            return {
+                "err": f"Given size exceeds allowable limit ({app.config['MAX_LEADERBOARD_SIZE']})",
+                "err_id": "invalid_arg",
+                "extra": ["exceeds_value", app.config["MAX_LEADERBOARD_SIZE"]]
+            }, HTTPStatus.BAD_REQUEST
+        visibility_config = app.config["VISIBILITY_CONFIGS"]["basic"]
+        cursor = qtpm.database.get_collection(visibility_config["collection"]).find(
+            {f"ratings.{category}": {"$exists": True}},
+            sort=[(f"ratings.{category}", pymongo.DESCENDING)],
+            limit=size,
+            projection=visibility_config["projection"]
+        )
+        return {"results": [doc for doc in cursor]}
+
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
         """A resource to automatically point to the user's own profile."""
@@ -969,6 +994,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         #         return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
         # return {"results": audios}
         categories = request.args.getlist("category")
+        difficulty_range_arg = request.args.get("difficultyRange")
         batch_size = int(request.args.get("batchSize") or 1)
         pipeline = [
             {'$group': {'_id': '$qb_id', 'category': {'$first': '$category'}}},
@@ -1005,8 +1031,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 ]
             }}
         ]
+        query = {}
         if categories:
-            pipeline.insert(0, {'$match': {'category': {'$in': categories}}})
+            query['category'] = {'$in': categories}
+
+        if difficulty_range_arg:
+            difficulty_range = [int(num) for num in re.split(r",\s*", difficulty_range_arg)]
+            query['difficultyNum'] = {'$gte': difficulty_range[0], '$lte': difficulty_range[1]}
+
+        if query:
+            pipeline.insert(0, {'$match': query})
         cursor = qtpm.rec_questions.aggregate(pipeline)
         questions = []
         for doc in cursor:
@@ -1047,12 +1081,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
         next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
-                                                            ["transcript"], batch_size)
+                                                            ["transcript", "tokenizations"], batch_size)
         if next_questions is None:
             return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
         results = []
         for doc in next_questions:
-            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
+            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"], "tokenizations": doc["tokenizations"]}
             if "sentenceId" in doc:
                 result_doc["sentenceId"] = doc["sentenceId"]
             results.append(result_doc)
