@@ -1081,12 +1081,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
         next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
-                                                            ["transcript"], batch_size)
+                                                            ["transcript", "tokenizations"], batch_size)
         if next_questions is None:
             return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
         results = []
         for doc in next_questions:
-            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
+            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"], "tokenizations": doc["tokenizations"]}
             if "sentenceId" in doc:
                 result_doc["sentenceId"] = doc["sentenceId"]
             results.append(result_doc)
