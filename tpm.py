@@ -28,6 +28,7 @@ class QuizzrTPM:
 
     def __init__(self, database_name: str, app_config: dict, secret_dir: str, rec_dir: str, api: QuizzrAPISpec):
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
+        self.logger = logging.getLogger(__name__)
         self.app_config = app_config
 
         self.SECRET_DATA_DIR = secret_dir
@@ -63,26 +64,26 @@ class QuizzrTPM:
         :return: A list of tuples each containing an error type and the cause.
         """
         errs = []
-        logging.debug(f"arguments = {arguments!r}")
-        logging.debug("Retrieving arguments...")
+        self.logger.debug(f"arguments = {arguments!r}")
+        self.logger.debug("Retrieving arguments...")
         blob_name = arguments.get("_id")
-        logging.debug(f"{type(blob_name)} blob_name = {blob_name!r}")
+        self.logger.debug(f"{type(blob_name)} blob_name = {blob_name!r}")
         if blob_name is None:
-            logging.warning("File ID not specified in arguments. Skipping")
+            self.logger.warning("File ID not specified in arguments. Skipping")
             errs.append(("bad_args", "undefined_blob_name"))
             return errs
 
         audio_doc = self.unproc_audio.find_one({"_id": blob_name})
-        logging.debug(f"audio_doc = {audio_doc!r}")
+        self.logger.debug(f"audio_doc = {audio_doc!r}")
         if audio_doc is None:
-            logging.warning("Could not find audio document. Skipping")
+            self.logger.warning("Could not find audio document. Skipping")
             errs.append(("bad_args", "invalid_blob_name"))
             return errs
 
-        logging.debug("Updating audio document with results from processing...")
+        self.logger.debug("Updating audio document with results from processing...")
         proc_audio_entry = audio_doc.copy()
         proc_audio_entry.update(arguments)
-        logging.debug(f"proc_audio_entry = {proc_audio_entry!r}")
+        self.logger.debug(f"proc_audio_entry = {proc_audio_entry!r}")
 
         self.audio.insert_one(proc_audio_entry)
         self.unproc_audio.delete_one({"_id": blob_name})
@@ -112,23 +113,23 @@ class QuizzrTPM:
         :return: A tuple containing the error type and reason, or None if no error occurred.
         """
         if qid is None:
-            logging.warning("Missing question ID. Skipping")
+            self.logger.warning("Missing question ID. Skipping")
             return "internal_error", "undefined_question_id"
         query = {"qb_id": qid}
 
         if sid is not None:
             query["sentenceId"] = sid
 
-        logging.debug("Retrieving question from unrecorded collection...")
+        self.logger.debug("Retrieving question from unrecorded collection...")
         question = self.unrec_questions.find_one(query)
-        logging.debug(f"question = {question!r}")
+        self.logger.debug(f"question = {question!r}")
         unrecorded = question is not None
         if unrecorded:
-            logging.debug("Unrecorded question not found")
+            self.logger.debug("Unrecorded question not found")
         else:
-            logging.debug("Found unrecorded question")
+            self.logger.debug("Found unrecorded question")
 
-        logging.debug("Updating question...")
+        self.logger.debug("Updating question...")
         if unrecorded:
             question["recordings"] = [rec_doc]
             self.rec_questions.insert_one(question)
@@ -136,7 +137,7 @@ class QuizzrTPM:
         else:
             results = self.rec_questions.update_one(query, {"$push": {"recordings": rec_doc}})
             if results.matched_count == 0:
-                logging.warning(f"Could not update question with ID {qid}")
+                self.logger.warning(f"Could not update question with ID {qid}")
                 return "internal_error", "question_update_failure"
 
     def add_rec_to_user(self, user_id: str, rec_doc: dict) -> Optional[Tuple[str, str]]:
@@ -147,13 +148,13 @@ class QuizzrTPM:
         :param rec_doc: The recording document to append. Should contain the audio ID and recording type
         :return: A tuple containing the type of error and the reason, or None if no error was encountered
         """
-        logging.debug("Updating user information...")
+        self.logger.debug("Updating user information...")
         if user_id is None:
-            logging.warning("Parameter 'user_id' is undefined. Skipping update")
+            self.logger.warning("Parameter 'user_id' is undefined. Skipping update")
             return "internal_error", "undefined_user_id"
         results = self.users.update_one({"_id": user_id}, {"$push": {"recordedAudios": rec_doc}})
         if results.matched_count == 0:
-            logging.warning(f"Could not update user with ID {user_id}")
+            self.logger.warning(f"Could not update user with ID {user_id}")
             return "internal_error", "user_update_failure"
 
     def add_recs_to_users(self, uid2rec_docs: Dict[str, List[dict]]):
@@ -165,16 +166,16 @@ class QuizzrTPM:
         """
         update_batch = []
         errs = []
-        logging.debug("Updating user information...")
+        self.logger.debug("Updating user information...")
         for user_id, rec_docs in uid2rec_docs.items():
             if user_id is None:
-                logging.warning("Parameter 'user_id' is undefined. Skipping update")
+                self.logger.warning("Parameter 'user_id' is undefined. Skipping update")
                 errs.append(("internal_error", "undefined_user_id"))
                 continue
             for rec_doc in rec_docs:
                 update_batch.append(UpdateOne({"_id": user_id}, {"$push": {"recordedAudios": rec_doc}}))
         results = self.users.bulk_write(update_batch)
-        logging.info(f"Successfully updated {results.matched_count} of {len(uid2rec_docs)} user documents")
+        self.logger.info(f"Successfully updated {results.matched_count} of {len(uid2rec_docs)} user documents")
         missed_results = len(uid2rec_docs) - results.matched_count
         # if missed_results == 1:
         #     errs.append(("internal_error", "user_update_failure"))
@@ -191,7 +192,7 @@ class QuizzrTPM:
         :return: An in-memory bytes buffer handler for the file
         """
         blob_name = "/".join([self.app_config["BLOB_ROOT"], blob_path])
-        logging.debug(f"blob_name = {blob_name!r}")
+        self.logger.debug(f"blob_name = {blob_name!r}")
         blob = self.bucket.blob(blob_name)
         file_bytes = blob.download_as_bytes()
         fh = io.BytesIO(file_bytes)
@@ -213,7 +214,7 @@ class QuizzrTPM:
         """
         query = {"_id": {"$in": id_list}, "version": self.app_config["VERSION"]}
         if self.audio.count_documents(query) == 0:
-            logging.error("No audio documents found")
+            self.logger.error("No audio documents found")
             return
 
         projection = {}
@@ -234,12 +235,12 @@ class QuizzrTPM:
         )
 
         for audio_doc in audio_cursor:
-            logging.debug(f"audio_doc = {audio_doc!r}")
+            self.logger.debug(f"audio_doc = {audio_doc!r}")
             if all(field in audio_doc for field in required_fields):
                 return audio_doc
-            logging.warning(f"Audio document is missing at least one required field: {', '.join(required_fields)}. Skipping")
+            self.logger.warning(f"Audio document is missing at least one required field: {', '.join(required_fields)}. Skipping")
 
-        logging.error("Failed to find a viable audio document")
+        self.logger.error("Failed to find a viable audio document")
 
     def find_questions(self, qids: list = None, **kwargs):
         """
@@ -258,31 +259,31 @@ class QuizzrTPM:
                 kwargs_c["filter"] = {}
             kwargs_c["filter"]["qb_id"] = {"$in": qids}
 
-        logging.info("Finding unrecorded questions...")
+        self.logger.info("Finding unrecorded questions...")
         unrec_cursor = self.unrec_questions.find(**kwargs_c)
         found_unrec_qids = []
         for i, question in enumerate(unrec_cursor):
-            logging.debug(f"question {i} = {question!r}")
+            self.logger.debug(f"question {i} = {question!r}")
             found_unrec_qids.append(question["qb_id"])
             yield question
-        logging.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
+        self.logger.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
 
         if qids:
             rec_qids = [qid for qid in qids if qid not in found_unrec_qids]
             if not rec_qids:
-                logging.info("Found all questions. Skipping finding recorded questions")
+                self.logger.info("Found all questions. Skipping finding recorded questions")
                 return
             kwargs_c["filter"]["qb_id"] = {"$in": rec_qids}
-            logging.info(f"Finding {len(rec_qids)} of {len(qids)} recorded question(s)...")
+            self.logger.info(f"Finding {len(rec_qids)} of {len(qids)} recorded question(s)...")
         else:
-            logging.info("Finding recorded questions...")
+            self.logger.info("Finding recorded questions...")
 
         rec_count = self.rec_questions.count_documents(**kwargs_c)
         rec_cursor = self.rec_questions.find(**kwargs_c)
         for i, question in enumerate(rec_cursor):
-            logging.debug(f"question {i} = {question!r}")
+            self.logger.debug(f"question {i} = {question!r}")
             yield question
-        logging.info(f"Found {rec_count} recorded question(s)")
+        self.logger.info(f"Found {rec_count} recorded question(s)")
 
     def pick_random_question(self,
                              collection_name: str,
@@ -325,17 +326,17 @@ class QuizzrTPM:
             else:
                 next_id_batch = qids_pool.copy()
                 qids_pool = []
-            logging.debug(f"next_id_batch = {next_id_batch!r}")
-            logging.debug(f"qids_pool = {qids_pool!r}")
+            self.logger.debug(f"next_id_batch = {next_id_batch!r}")
+            self.logger.debug(f"qids_pool = {qids_pool!r}")
             questions_cursor = self.database.get_collection(collection_name).find({"qb_id": {"$in": next_id_batch}})
             found = set()
             for doc in questions_cursor:
-                logging.debug(f"doc = {doc!r}")
+                self.logger.debug(f"doc = {doc!r}")
                 valid_doc = True
                 for field in required_fields:
                     if field not in doc:
                         valid_doc = False
-                        logging.warning(f"Question does not contain required field '{field}'. Ignoring")
+                        self.logger.warning(f"Question does not contain required field '{field}'. Ignoring")
                         errors.append((repr(doc["_id"]), f"missing_{field}"))
                         break
                 if valid_doc:
@@ -343,14 +344,14 @@ class QuizzrTPM:
                     found.add(doc["qb_id"])
             next_batch_size -= len(found)
             if next_batch_size == 0:
-                logging.info("Found all questions requested. Returning results")
+                self.logger.info("Found all questions requested. Returning results")
                 return sentences, errors
-            logging.info(f"Found {len(found)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
+            self.logger.info(f"Found {len(found)} of {batch_size} questions requested. Searching for {next_batch_size} more...")
         if not qids_pool:
-            logging.info("Could not find any more valid questions. Returning results")
+            self.logger.info("Could not find any more valid questions. Returning results")
         if sentences:
             return sentences, errors
-        logging.error("Failed to find any viable questions. Aborting")
+        self.logger.error("Failed to find any viable questions. Aborting")
 
     # Utility methods for automatically updating the cached ID list.
     def insert_unrec_question(self, *args, **kwargs):
@@ -412,7 +413,7 @@ class QuizzrTPM:
         # TODO: Actual BrokenPipeError handling
         file2blob = {}
 
-        logging.info(f"Uploading {len(file_paths)} file(s)...")
+        self.logger.info(f"Uploading {len(file_paths)} file(s)...")
         upload_count = 0
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
@@ -421,7 +422,7 @@ class QuizzrTPM:
             blob = self.bucket.blob(blob_path)
             blob.upload_from_filename(file_path)
             file2blob[file_name] = blob_name
-            logging.debug(f"{upload_count}/{len(file_paths)}")
+            self.logger.debug(f"{upload_count}/{len(file_paths)}")
 
         return file2blob
 
@@ -466,7 +467,7 @@ class QuizzrTPM:
         unproc_audio_batch = []
         audio_batch = []
         uid2rec_docs = {}
-        logging.info("Preparing document entries...")
+        self.logger.info("Preparing document entries...")
         for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
@@ -485,24 +486,24 @@ class QuizzrTPM:
                 uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
             else:
                 unproc_audio_batch.append(entry)
-            logging.debug(f"entry = {entry!r}")
+            self.logger.debug(f"entry = {entry!r}")
 
-        logging.debug(f"unproc_audio_batch = {unproc_audio_batch}")
-        logging.debug(f"audio_batch = {audio_batch}")
+        self.logger.debug(f"unproc_audio_batch = {unproc_audio_batch}")
+        self.logger.debug(f"audio_batch = {audio_batch}")
 
         if not unproc_audio_batch:
-            logging.info("No documents to insert into the UnprocessedAudio collection. Skipping")
+            self.logger.info("No documents to insert into the UnprocessedAudio collection. Skipping")
             unproc_results = None
         else:
             unproc_results = self.unproc_audio.insert_many(unproc_audio_batch)
-            logging.info(f"Inserted {len(unproc_results.inserted_ids)} document(s) into the UnprocessedAudio collection")
+            self.logger.info(f"Inserted {len(unproc_results.inserted_ids)} document(s) into the UnprocessedAudio collection")
 
         if not audio_batch:
-            logging.info("No documents to insert into the Audio collection. Skipping")
+            self.logger.info("No documents to insert into the Audio collection. Skipping")
             proc_results = None
         else:
             proc_results = self.audio.insert_many(audio_batch)
-            logging.info(f"Inserted {len(proc_results.inserted_ids)} document(s) into the Audio collection")
+            self.logger.info(f"Inserted {len(proc_results.inserted_ids)} document(s) into the Audio collection")
             self.add_recs_to_users(uid2rec_docs)
         return unproc_results, proc_results
 

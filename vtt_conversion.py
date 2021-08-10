@@ -4,8 +4,13 @@ from typing import Tuple, Iterable
 import gentle
 
 
-def aligned_word_to_vtt_cue(word_entry):
-    """Convert a Gentle Word object into a VTT cue."""
+def aligned_word_to_vtt_cue(word_entry: gentle.transcription.Word):
+    """
+    Convert a Gentle Word object into a VTT cue.
+
+    :param word_entry: A Gentle Word object
+    :return: A VTT cue including a timestamp and the word aligned
+    """
     to_symbol = " --> "
     if word_entry.case != "success":
         return
@@ -20,7 +25,12 @@ def aligned_word_to_vtt_cue(word_entry):
 
 
 def gentle_alignment_to_vtt(words: Iterable[gentle.transcription.Word]) -> str:
-    """Convert a series of Gentle Word objects into a VTT string."""
+    """
+    Convert a series of Gentle Word objects into a VTT string.
+
+    :param words: Any kind of iterable that contains Gentle Word objects
+    :return: A VTT-converted forced alignment
+    """
     vtt = "WEBVTT Kind: captions; Language: en"
     gap = "\n\n"
     for word_entry in words:
@@ -31,14 +41,26 @@ def gentle_alignment_to_vtt(words: Iterable[gentle.transcription.Word]) -> str:
 
 
 def seconds_to_isoformat(seconds: float) -> str:
-    """Convert seconds into a properly-formatted ISO timestamp (00:MM:SS.FFFFFF)"""
+    """
+    Convert seconds into a properly-formatted ISO timestamp (00:MM:SS.FFFFFF)
+
+    :param seconds: The number of seconds, which may include values greater than or equal to 60. However, it will ignore
+                    more than 60 minutes worth of time.
+    :return: An ISO timestamp representation
+    """
     minutes, seconds, microseconds = divide_seconds(seconds)
     return time(minute=minutes, second=seconds, microsecond=microseconds).isoformat()
 
 
 def divide_seconds(seconds: float) -> Tuple[int, int, int]:
-    """Split up seconds into a tuple of minutes, seconds, and microseconds.
-    Postcondition: 0 <= minutes < 60, 0 <= seconds < 60, 0 <= microseconds < 1000000"""
+    """
+    Split up seconds into a tuple of minutes, seconds, and microseconds.
+    Postcondition: 0 <= minutes < 60, 0 <= seconds < 60, 0 <= microseconds < 1000000
+
+    :param seconds: The number of seconds, which may include values greater than or equal to 60. However, it will ignore
+                    more than 60 minutes worth of time.
+    :return: The number of minutes, seconds, and microseconds as a tuple
+    """
     microseconds = seconds * 1e+6
     minutes = seconds // 60
     return int(minutes % 60), int(seconds % 60), int(microseconds % 1e+6)

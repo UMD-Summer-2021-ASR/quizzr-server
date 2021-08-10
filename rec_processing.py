@@ -9,13 +9,14 @@ import time
 from typing import List, Dict, Union
 
 import bson.json_util
+from pymongo.database import Database
 
 import forced_alignment
 import vtt_conversion
 
 
 class QuizzrWatcher:
-    def __init__(self, watch_dir, func, interval=2, queue_size_limit=32):
+    def __init__(self, watch_dir: str, func, interval: float = 2, queue_size_limit: int = 32):
         self.done = False
         self.watch_dir = watch_dir
         self.queue_size_limit = queue_size_limit
@@ -41,7 +42,13 @@ class QuizzrWatcher:
 
     @staticmethod
     def queue_submissions(directory: str, size_limit: int = None):
-        """Get up to <size_limit> submission names"""
+        """
+        Get up to <size_limit> submission names
+
+        :param directory: The directory to get the submission names from
+        :param size_limit: The maximum number of submission names allowable
+        :return: A set of submission names
+        """
         found_files = os.listdir(directory)
         queued_submissions = set()
         for i, found_file in enumerate(found_files):
@@ -53,7 +60,8 @@ class QuizzrWatcher:
 
 
 class QuizzrProcessor:
-    def __init__(self, database, directory, config, submission_file_types):
+    def __init__(self, database: Database, directory: str, config: dict, submission_file_types: List[str]):
+        self.logger = logging.getLogger(__name__)
         self.submission_file_types = submission_file_types
         self.config = config
         self.DIRECTORY = directory
@@ -70,11 +78,19 @@ class QuizzrProcessor:
         self.ERROR_ACCURACY = -1.0
 
     def pick_submissions(self, submissions: List[str]) -> dict:
-        """Pre-screen all given normal submissions and return the ones that passed the pre-screening.
-        Return buzz recordings immediately."""
-        logging.info(f"Gathering metadata for {len(submissions)} submission(s)...")
+        """
+        Pre-screen all given normal submissions and return the ones that passed the pre-screening.
+        Return buzz recordings immediately.
+
+        :param submissions: A list of submission names. A submission inside a directory must have a WAV file and a JSON
+                            file associated with it.
+        :return: A dictionary containing the results of each submission, which always contains a "case" key. If the case
+                 is "accepted", it will contain a "metadata" key and may contain a "vtt" and "accuracy" key if it is a
+                 normal recording. If the case is "err", it will include a machine-readable error message.
+        """
+        self.logger.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
-        logging.debug(f"sub2meta = {sub2meta!r}")
+        self.logger.debug(f"sub2meta = {sub2meta!r}")
         typed_submissions = QuizzrProcessor.categorize_submissions(submissions, sub2meta)
 
         final_results = {}
@@ -86,6 +102,7 @@ class QuizzrProcessor:
                     final_results[submission] = {"case": "err", "err": results[submission]["err"]}
                 elif results[submission]["accuracy"] < self.config["minAccuracy"]:
                     final_results[submission] = {"case": "rejected", "accuracy": results[submission]["accuracy"]}
+                    self.logger.info(f"Removing submission with name '{submission}'")
                     delete_submission(self.DIRECTORY, submission, self.submission_file_types)
                 else:
                     final_results[submission] = {
@@ -95,7 +112,7 @@ class QuizzrProcessor:
                         "accuracy": results[submission]["accuracy"]
                     }
                     num_accepted_submissions += 1
-            logging.info(f"Accepted {num_accepted_submissions} of {len(typed_submissions['normal'])} submission(s)")
+            self.logger.info(f"Accepted {num_accepted_submissions} of {len(typed_submissions['normal'])} submission(s)")
 
         if "buzz" in typed_submissions:
             for submission in typed_submissions["buzz"]:
@@ -103,7 +120,7 @@ class QuizzrProcessor:
                     "case": "accepted",
                     "metadata": sub2meta[submission]
                 }
-            logging.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins")
+            self.logger.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins")
 
         if "answer" in typed_submissions:
             for submission in typed_submissions["answer"]:
@@ -111,15 +128,23 @@ class QuizzrProcessor:
                     "case": "accepted",
                     "metadata": sub2meta[submission]
                 }
-            logging.info(f"Received {len(typed_submissions['answer'])} submission(s) for an answer to a question")
+            self.logger.info(f"Received {len(typed_submissions['answer'])} submission(s) for an answer to a question")
         return final_results
 
     def preprocess_submissions(self,
                                submissions: List[str],
                                sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Union[float, str]]]:
-        """Return the accuracy and VTT data of each submission."""
+        """
+        Return the accuracy and VTT data of each submission.
+
+        :param submissions: The list of submissions to process
+        :param sub2meta: A dictionary mapping submissions to metadata, which must contain the qb_id and should contain
+                         either a sentenceId or a __sentenceIndex
+        :return: A dictionary mapping submissions to results, which contain either an "accuracy" and "vtt" key or an
+                 "err" key.
+        """
         # TODO: Make into batches if possible.
-        logging.info(f"Evaluating {len(submissions)} submission(s)...")
+        self.logger.info(f"Evaluating {len(submissions)} submission(s)...")
 
         num_finished_submissions = 0
         results = {}
@@ -129,56 +154,56 @@ class QuizzrProcessor:
             wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
             if sub2meta.get(submission) is None:
-                logging.error(f"Metadata for submission '{submission}' not found. Skipping")
+                self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
                 results[submission]["err"] = "meta_not_found"
                 continue
             metadata = sub2meta[submission]
             qid = metadata.get("qb_id")
-            logging.debug(f"{type(qid)} qid = {qid!r}")
+            self.logger.debug(f"{type(qid)} qid = {qid!r}")
 
             if qid is None:
-                logging.error(f"Question ID for submission '{submission}' not found. Skipping")
+                self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
                 results[submission]["err"] = "qid_not_found"
                 continue
 
             query = {"qb_id": qid}
 
             sid = metadata.get("sentenceId")
-            logging.debug(f"{type(sid)} sid = {sid!r}")
+            self.logger.debug(f"{type(sid)} sid = {sid!r}")
             if sid is None:
-                logging.debug(f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
-                # logging.error(f"Sentence ID for submission {submission} not found. Skipping")
+                self.logger.debug(f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
+                # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
                 # results[submission]["err"] = "sid_not_found"
                 # continue
             else:
                 query["sentenceId"] = sid
 
-            logging.debug("Finding question in UnrecordedQuestions...")
+            self.logger.debug("Finding question in UnrecordedQuestions...")
             question = self.unrec_questions.find_one(query, {"transcript": 1})
             if question is None:
-                logging.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
+                self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
                 question = self.rec_questions.find_one(query, {"transcript": 1})
 
             if question is None:
-                logging.error("Question not found. Skipping submission")
+                self.logger.error("Question not found. Skipping submission")
                 results[submission]["err"] = "sentence_not_found"
                 continue
 
             r_transcript = question.get("transcript")
 
             if r_transcript is None:
-                logging.error("Transcript not found. Skipping submission")
+                self.logger.error("Transcript not found. Skipping submission")
                 results[submission]["err"] = "transcript_not_found"
                 continue
 
             # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
             if "__sentenceIndex" in metadata:
-                logging.info("Attempting transcript segmentation...")
+                self.logger.info("Attempting transcript segmentation...")
                 if "tokenizations" in question:
                     slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
                     r_transcript = r_transcript[slice_start:slice_end]
                 else:
-                    logging.info("Could not segment transcript. Submission may not pass pre-screen")
+                    self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
 
             accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
             if accuracy is None:
@@ -189,19 +214,25 @@ class QuizzrProcessor:
 
             num_finished_submissions += 1
 
-            logging.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
-            logging.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
+            self.logger.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
+            self.logger.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
             results[submission]["accuracy"] = accuracy
             results[submission]["vtt"] = vtt
         return results
 
     # ****************** HELPER METHODS *********************
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
-        """Do a forced alignment and return the percentage of words aligned (or known) along with the VTT."""
+        """
+        Do a forced alignment and return the percentage of words aligned (or known) along with the VTT.
+
+        :param file_path: The path to the WAV file
+        :param r_transcript: The transcript to use as a reference
+        :return: A tuple containing the accuracy and the VTT or None, None if a RuntimeError occurred.
+        """
         try:
             alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         except RuntimeError as e:
-            logging.error(f"Encountered RuntimeError: {e}. Aborting")
+            self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
             return None, None
         words = alignment.words
         # total_words = len(self.process_transcript(r_transcript))
@@ -216,11 +247,21 @@ class QuizzrProcessor:
         return total_aligned_words / total_words, vtt
 
     def process_transcript(self, t: str) -> List[str]:
-        """Return a list of words without punctuation or capitalization from a transcript."""
+        """
+        Return a list of words without punctuation or capitalization from a transcript.
+
+        :param t: The transcript to process
+        :return: A list containing every word without punctuation and purely lowercase
+        """
         return re.split(self.whitespace_regex, re.sub(self.punc_regex, " ", t).lower())
 
     def get_metadata(self, submissions: List[str]) -> Dict[str, Dict[str, str]]:
-        """Return the metadata of each submission (a JSON file) if available."""
+        """
+        Return the metadata of each submission (a JSON file) if available.
+
+        :param submissions: The names of each submission
+        :return: A dictionary mapping submission names to metadata for each submission that has metadata
+        """
         sub2meta = {}
         for submission in submissions:
             submission_path = os.path.join(self.DIRECTORY, submission)
@@ -231,8 +272,14 @@ class QuizzrProcessor:
         return sub2meta
 
     @staticmethod
-    def categorize_submissions(submissions, sub2meta):
-        """Divide the submissions by the recording type."""
+    def categorize_submissions(submissions: List[str], sub2meta: Dict[str, dict]):
+        """
+        Divide the submissions by the recording type.
+
+        :param submissions: The submission names
+        :param sub2meta: A dictionary mapping submission names to metadata, which must contain a "recType" key
+        :return: A dictionary mapping submission types to lists of submission names
+        """
         typed_submissions = {}
         for submission in submissions:
             submission_type = sub2meta[submission]["recType"]
@@ -307,10 +354,15 @@ class QuizzrProcessor:
         self.users.bulk_write(u_batch)"""
 
 
-def delete_submission(directory, submission_name, file_types):
-    """Remove a submission from disk."""
+def delete_submission(directory: str, submission_name: str, file_types: List[str]):
+    """
+    Remove a submission from disk.
+
+    :param directory: The directory to find the submission in
+    :param submission_name: The name of the submission
+    :param file_types: The file extensions to look for (must not start with a dot)
+    """
     # TODO: Make it find all files with submission_name instead.
-    logging.info(f"Removing submission with name '{submission_name}'")
     submission_path = os.path.join(directory, submission_name)
     for ext in file_types:
         file_path = ".".join([submission_path, ext])
