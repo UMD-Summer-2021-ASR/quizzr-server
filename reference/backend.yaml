@@ -262,13 +262,15 @@ paths:
                 audio:
                   type: string
                   format: binary
-                qid:
-                  $ref: '#/components/schemas/Str-ObjectId'
+                qb_id:
+                  $ref: '#/components/schemas/QB-ID'
                 recType:
                   type: string
                   enum:
                     - normal
                     - buzz
+                sentenceId:
+                  type: integer
                 diarMetadata:
                   type: string
               required:
