@@ -352,6 +352,7 @@ class QuizzrTPM:
         if sentences:
             return sentences, errors
         self.logger.error("Failed to find any viable questions. Aborting")
+        return None, errors
 
     # Utility methods for automatically updating the cached ID list.
     def insert_unrec_question(self, *args, **kwargs):

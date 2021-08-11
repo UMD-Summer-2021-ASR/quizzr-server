@@ -179,10 +179,10 @@ class QuizzrProcessor:
                 query["sentenceId"] = sid
 
             self.logger.debug("Finding question in UnrecordedQuestions...")
-            question = self.unrec_questions.find_one(query, {"transcript": 1})
+            question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
             if question is None:
                 self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
-                question = self.rec_questions.find_one(query, {"transcript": 1})
+                question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
 
             if question is None:
                 self.logger.error("Question not found. Skipping submission")
