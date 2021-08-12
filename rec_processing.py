@@ -270,6 +270,7 @@ class QuizzrProcessor:
                 continue
 
             r_transcript = question.get("transcript")
+            self.logger.debug(f"r_transcript = {r_transcript!r}")
 
             if r_transcript is None:
                 self.logger.error("Transcript not found. Skipping submission")
@@ -284,6 +285,8 @@ class QuizzrProcessor:
                     r_transcript = r_transcript[slice_start:slice_end]
                 else:
                     self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
+
+            self.logger.debug(f"r_transcript = {r_transcript!r}")
 
             accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
             if accuracy is None:

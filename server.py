@@ -1,15 +1,14 @@
-import atexit
 import json
 import logging
 import logging.handlers
 import multiprocessing
 import os
 import pprint
+import queue
 import re
-import signal
 from copy import deepcopy
 from sys import exit
-from datetime import datetime
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from secrets import token_urlsafe
 from typing import List, Union, Tuple, Dict, Any, Optional
@@ -39,8 +38,6 @@ DEV_ENV_NAME = "development"
 PROD_ENV_NAME = "production"
 TEST_ENV_NAME = "testing"
 
-created_process = False
-
 
 def create_app(test_overrides: dict = None, test_inst_path: str = None):
     """
@@ -50,7 +47,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     :param test_inst_path: The instance path of the server. Has the highest overriding priority
     :return: The data flow server as a Flask app
     """
-    global created_process
 
     instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
         or os.path.expanduser(os.path.join("~", "quizzr_server"))
@@ -72,7 +68,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     os.makedirs(app.instance_path, exist_ok=True)
     app.logger.info("Created instance directory")
     app.logger.info("Configuring server instance...")
-    path = app.instance_path
     default_config = {
         "UNPROC_FIND_LIMIT": 32,
         "DATABASE": "QuizzrDatabase",
@@ -107,10 +102,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         },
         "USE_ID_TOKENS": True,
         "MAX_LEADERBOARD_SIZE": 200,  # The maximum number of entries allowable on the leaderboard.
-        "DEFAULT_LEADERBOARD_SIZE": 10  # The default number of entries on the leaderboard.
+        "DEFAULT_LEADERBOARD_SIZE": 10,  # The default number of entries on the leaderboard.
+        "QUEUE_GET_INTERVAL": 0.3,
+        "QUEUE_GET_MAX_BLOCK": 3600
     }
 
-    config_dir = os.path.join(path, "config")
+    config_dir = os.path.join(app.instance_path, "config")
     if not os.path.exists(config_dir):
         os.mkdir(config_dir)
     conf_path = os.path.join(config_dir, "sv_config.json")
@@ -168,7 +165,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     # app.logger.debug("Finished instantiating QuizzrWatcher")
     app.logger.debug("Instantiating process...")
     # qw_process = multiprocessing.Process(target=qw.execute)
-    queue = multiprocessing.Queue()
+    prescreen_results_queue = multiprocessing.Queue()
     qw_process = multiprocessing.Process(target=rec_processing.start_watcher, kwargs={
         "db_name": app_conf["DATABASE"],
         "tpm_config": app_conf,
@@ -178,7 +175,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         "queue_dir": queue_dir,
         "proc_config": app_conf["PROC_CONFIG"],
         "submission_file_types": app_conf["SUBMISSION_FILE_TYPES"],
-        "queue": queue
+        "queue": prescreen_results_queue
     })
     qw_process.daemon = True
     app.logger.debug("Finished instantiating process")
@@ -206,9 +203,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     # app.logger.debug("Finished registering signal handler")
     app.logger.debug("Starting process...")
     qw_process.start()
-    print("This is a test message 3")
     app.logger.info("Finished pre-screening program initialization")
     socket_server_key = {}
+    prescreen_statuses = []
 
     pprinter = pprint.PrettyPrinter()
     # TODO: multiprocessing
@@ -235,13 +232,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             recordings = request.files.getlist("audio")
             qb_ids = request.form.getlist("qb_id")
             sentence_ids = request.form.getlist("sentenceId")
-            diarization_metadatas = request.form.getlist("diarMetadata")
+            diarization_metadata_list = request.form.getlist("diarMetadata")
             rec_types = request.form.getlist("recType")
 
             if not (len(recordings) == len(rec_types)
                     and (not qb_ids or len(recordings) == len(qb_ids))
                     and (not sentence_ids or len(recordings) == len(sentence_ids))
-                    and (not diarization_metadatas or len(recordings) == len(diarization_metadatas))):
+                    and (not diarization_metadata_list or len(recordings) == len(diarization_metadata_list))):
                 app.logger.error("Received incomplete form batch. Aborting")
                 return "incomplete_batch", HTTPStatus.BAD_REQUEST
 
@@ -258,7 +255,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             #     if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
             #         return result
             # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
-            return pre_screen(recordings, rec_types, user_id, qb_ids, sentence_ids, diarization_metadatas)
+            return pre_screen(recordings, rec_types, user_id, qb_ids, sentence_ids, diarization_metadata_list)
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
@@ -339,7 +336,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                    sentence_ids: List[Union[int, str]] = None,
                    diarization_metadata_list: List[str] = None) -> Tuple[Union[dict, str], int]:
         """
-        Submit one or more recordings for pre-screening and upload them to the database if they all pass.
+        Submit one or more recordings for pre-screening and uploading.
         WARNING: Submitting recordings of different rec_types in the same batch can give unpredictable results.
 
         :param recordings: A list of audio files
@@ -348,11 +345,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         :param qb_ids: A list of question IDs associated with each recording
         :param sentence_ids: The associated sentence IDs. Only required for segmented questions
         :param diarization_metadata_list: (optional) The associated parameter sets for diarization.
-        :return: A dictionary with the key "prescreenSuccessful", or a string if an error occurred, and a status code.
+        :return: A dictionary with the key "prescreenPointers" and a status code. If an error occurred, a string with a
+                 status code is returned instead.
         """
         valid_rec_types = ["normal", "buzz", "answer"]
 
-        submission_names = []
+        # submission_names = []
+        pointers = []
 
         for i in range(len(recordings)):
             recording = recordings[i]
@@ -382,20 +381,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 app.logger.error("Form argument 'qid' expected. Aborting")
                 return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
 
-            # user_ids = QuizzrTPM.get_ids(qtpm.users)
-            # if not user_ids:
-            #     app.logger.error("No user IDs found. Aborting")
-            #     return "empty_uids", HTTPStatus.INTERNAL_SERVER_ERROR
-            # user_ids = qtpm.user_ids.copy()
-            # while True:
-            #     user_id, success = error_handling.to_oid_soft(random.choice(user_ids))
-            #     if success:
-            #         break
-            #     app.logger.warning(f"Found malformed user ID {user_id}. Retrying...")
-            #     user_ids.remove(user_id)
-            #     if not user_ids:
-            #         app.logger.warning("Could not find properly formed user IDs. Proceeding with last choice")
-            #         break
             _debug_variable("user_id", user_id)
 
             metadata = {
@@ -414,31 +399,39 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
 
             submission_name = _save_recording(queue_dir, recording, metadata)
             _debug_variable("submission_name", submission_name)
+            pointer = token_urlsafe(64)
+            expiry = datetime.now() + timedelta(minutes=30)
+            ps_doc = {"pointer": pointer, "name": submission_name, "status": "running", "expiry": expiry}
+            prescreen_statuses.append(ps_doc)
+            pointers.append(pointer)
 
-            submission_names.append(submission_name)
+            # submission_names.append(submission_name)
+
+        return {"prescreenPointers": pointers}, HTTPStatus.ACCEPTED
         # TODO: Handle files being processed in an arbitrary order
-        app.logger.info("Awaiting result...")
-        pre_screen_successful = True
-        while submission_names:
-            _debug_variable("submission_names", submission_names)
-            result = queue.get(True, 3600)  # Block for at most 1 hour for now.
-            app.logger.info("Received submission. Evaluating name...")
-            _debug_variable("queue.get()", result)
-            if result["name"] in submission_names:
-                app.logger.info("Name matches. Removing from list and evaluating if pre-screen is successful")
-                submission_names.remove(result["name"])
-                if result["case"] == "rejected":
-                    app.logger.info("Submission was rejected. Returning result")
-                    pre_screen_successful = False
-                    break
-                app.logger.info("Submission was accepted. Continuing...")
-            else:
-                # TODO: REALLY consider not doing this in the future.
-                app.logger.info("Name does not match. Pushing back onto queue")
-                queue.put(result)
-
-        app.logger.info(f"Finished evaluating results. Final Result: {pre_screen_successful}")
-        return {"prescreenSuccessful": pre_screen_successful}, HTTPStatus.ACCEPTED
+        # app.logger.info("Awaiting result...")
+        # pre_screen_successful = True
+        # while submission_names:
+        #     _debug_variable("submission_names", submission_names)
+        #     result = prescreen_results_queue.get(True, app.config["QUEUE_GET_MAX_BLOCK"])  # Block for at most 1 hour for now.
+        #     app.logger.info("Received submission. Evaluating name...")
+        #     _debug_variable("queue.get()", result)
+        #     if result["name"] in submission_names:
+        #         app.logger.info("Name matches. Removing from list and evaluating if pre-screen is successful")
+        #         submission_names.remove(result["name"])
+        #         if result["case"] == "rejected":
+        #             app.logger.info("Submission was rejected. Continuing...")
+        #             pre_screen_successful = False
+        #         else:
+        #             app.logger.info("Submission was accepted. Continuing...")
+        #     else:
+        #         # TODO: REALLY consider not doing this in the future.
+        #         app.logger.info("Name does not match. Pushing back onto queue")
+        #         prescreen_results_queue.put(result)
+        #     time.sleep(app.config["QUEUE_GET_INTERVAL"])
+        #
+        # app.logger.info(f"Finished evaluating results. Final Result: {pre_screen_successful}")
+        # return {"prescreenSuccessful": pre_screen_successful}, HTTPStatus.ACCEPTED
 
         # try:
         #     results = qp.pick_submissions(
@@ -590,11 +583,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             return handle_game_results_category(session_results)
         if "categories" in session_results:
             return handle_game_results_categories(session_results)
-        return {
-            "err": "Arguments 'category' or 'categories' not provided",
-            "err_id": "undefined_args",
-            "extra": ["category_or_categories"]
-        }, HTTPStatus.BAD_REQUEST
+        return _make_err_response(
+            "Arguments 'category' or 'categories' not provided",
+            "undefined_args",
+            HTTPStatus.BAD_REQUEST,
+            ["category_or_categories"]
+        )
 
     def handle_game_results_category(session_results):
         mode = session_results["mode"]
@@ -955,11 +949,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         arg_size = request.args.get("size")
         size = arg_size or app.config["DEFAULT_LEADERBOARD_SIZE"]
         if size > app.config["MAX_LEADERBOARD_SIZE"]:
-            return {
-                "err": f"Given size exceeds allowable limit ({app.config['MAX_LEADERBOARD_SIZE']})",
-                "err_id": "invalid_arg",
-                "extra": ["exceeds_value", app.config["MAX_LEADERBOARD_SIZE"]]
-            }, HTTPStatus.BAD_REQUEST
+            return _make_err_response(
+                f"Given size exceeds allowable limit ({app.config['MAX_LEADERBOARD_SIZE']})",
+                "invalid_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["exceeds_value", app.config["MAX_LEADERBOARD_SIZE"]]
+            )
         visibility_config = app.config["VISIBILITY_CONFIGS"]["basic"]
         cursor = qtpm.database.get_collection(visibility_config["collection"]).find(
             {f"ratings.{category}": {"$exists": True}},
@@ -968,6 +963,22 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             projection=visibility_config["projection"]
         )
         return {"results": [doc for doc in cursor]}
+
+    @app.route("/prescreen/<pointer>", methods=["GET"])
+    def get_prescreen_status(pointer):
+        status_doc = _get_ps_doc(pointer=pointer)
+        if status_doc is None:
+            return _make_err_response("No such resource", "resource_not_found", HTTPStatus.NOT_FOUND)
+        if datetime.now() > status_doc["expiry"]:
+            return _make_err_response(
+                "The resource to access the status of this submission has expired.",
+                "expired_resource",
+                HTTPStatus.NOT_FOUND
+            )
+        _update_prescreen_statuses()
+        result = status_doc.copy()
+        del result["expiry"]
+        return result
 
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
@@ -1347,5 +1358,64 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             prefix = ""
         val_pp = pprinter.pformat(val)
         app.logger.debug(f"{prefix}{name} = {val_pp}")
+
+    def _update_prescreen_statuses():
+        # Update statuses from queue.
+        # TODO: Maybe do this in batches
+        while True:
+            try:
+                result = prescreen_results_queue.get(block=False)
+                _debug_variable("queue.get()", result)
+            except queue.Empty:
+                break
+            else:
+                ps_doc = _get_ps_doc(name=result["name"])
+                _debug_variable("ps_doc", ps_doc)
+                if result["case"] == "err":
+                    ps_doc["status"] = "err"
+                    ps_doc["err"] = result["err"]
+                else:
+                    ps_doc["status"] = "finished"
+                    ps_doc["accepted"] = result["case"] == "accepted"
+        # Remove expired pointers.
+        now = datetime.now()
+        # A for loop won't delete documents properly.
+        i = 0
+        while i < len(prescreen_statuses):
+            doc = prescreen_statuses[i]
+            if now > doc["expiry"]:
+                prescreen_statuses.remove(doc)
+            else:
+                i += 1
+
+    def _get_ps_doc(*, name=None, pointer=None):
+        """Get a pre-screen status document by either name or pointer. Only accepts keyword arguments. Return None if
+        no document is found."""
+        k_name = None
+        k_val = None
+        if name:
+            k_name = "name"
+            k_val = name
+        elif pointer:
+            k_name = "pointer"
+            k_val = pointer
+
+        if k_name is None:
+            raise ValueError("No arguments specified")
+
+        for doc in prescreen_statuses:
+            if doc[k_name] == k_val:
+                return doc
+
+        return None
+
+    def _make_err_response(msg: str, id_: str, status_code: int, extra: list = None):
+        response = {
+            "err": msg,
+            "err_id": id_
+        }
+        if extra:
+            response["extra"] = extra
+        return response, status_code
 
     return app
