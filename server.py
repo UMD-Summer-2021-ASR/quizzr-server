@@ -1,5 +1,6 @@
 import json
 import logging
+import logging.handlers
 import os
 import pprint
 import re
@@ -51,7 +52,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         instance_relative_config=True,
         instance_path=instance_path
     )
-    app.logger.info(f"Initializing server with instance path '{instance_path}'")
+    log_dir = os.path.join(app.instance_path, "storage", "logs")
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    log_path = os.path.join(log_dir, "sv_log.log")
+    handler = logging.handlers.TimedRotatingFileHandler(log_path, when='midnight', backupCount=7)
+    app.logger.addHandler(handler)
+    app.logger.info(f"Initialized server with instance path '{instance_path}'")
     CORS(app)
     server_dir = os.path.dirname(__file__)
     os.makedirs(app.instance_path, exist_ok=True)
@@ -401,6 +408,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         app.logger.info("Evaluating outcome of pre-screen...")
 
         for submission in results:
+            app.logger.info(f"Removing submission with name '{submission}'")
             rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
 
         for submission_name in submission_names:
@@ -853,6 +861,15 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
         return {"successful": results.matched_count, "requested": len(session_results["users"])}
 
+    @app.route("/hls/vtt/<audio_id>", methods=["GET"])
+    def get_vtt(audio_id):
+        audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
+        if audio_doc is None or audio_doc["vtt"] is None:
+            abort(HTTPStatus.NOT_FOUND)
+        response = make_response(audio_doc["vtt"])
+        response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        return response
+
     @app.route("/leaderboard", methods=["GET"])
     def get_leaderboard():
         category = request.args.get("category") or "all"
@@ -1081,14 +1098,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             return "unrec_empty_qids", HTTPStatus.NOT_FOUND
 
         next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
-                                                            ["transcript", "tokenizations"], batch_size)
+                                                            ["transcript"], batch_size)
         if next_questions is None:
             return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
         results = []
         for doc in next_questions:
-            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"], "tokenizations": doc["tokenizations"]}
+            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
             if "sentenceId" in doc:
                 result_doc["sentenceId"] = doc["sentenceId"]
+            if "tokenizations" in doc:
+                result_doc["tokenizations"] = doc["tokenizations"]
             results.append(result_doc)
         return {"results": results, "errors": errors}
 

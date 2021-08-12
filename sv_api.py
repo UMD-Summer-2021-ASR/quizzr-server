@@ -12,19 +12,30 @@ class QuizzrAPISpec:
             self.api = yaml.load(api_f.read(), Loader=yaml.FullLoader)
 
     def path_for(self, op_id: str):
-        """Retrieve the path and operation type associated with the given operation ID."""
+        """
+        Retrieve the path and operation type associated with the given operation ID.
+
+        :param op_id: The target value of the "operation_id" field
+        :return: A tuple containing the path and HTTP operation type
+        """
         for path, ops in self.api["paths"].items():
             for op, description in ops.items():
                 if type(description) is dict and description.get("operationId") == op_id:
                     return path, op
 
     def get_schema_stub(self, schema_name: str):
-        """Return a copy of the stub example of a schema."""
+        """
+        Return a copy of the stub example of a schema.
+
+        :param schema_name: The name of the schema in #/components/schemas
+        :return: An example at the index self.STUB
+        """
         return deepcopy(self.api["components"]["schemas"][schema_name]["examples"][self.STUB])
 
     def get_schema(self, schema_name: str, resolve_references=False) -> dict:
         """
         Return a schema from the API specification, optionally with all references resolved.
+
         :param schema_name: The name of the schema as identified in the specification.
         :param resolve_references: If this is True, replace all references with their actual values.
         """
@@ -34,7 +45,14 @@ class QuizzrAPISpec:
         return schema
 
     def build_schema(self, in_schema: dict) -> dict:
-        """Recursively resolve all references in a schema for validation. Does not support circular references"""
+        """
+        Recursively resolve all references in a schema for validation.
+
+        WARNING: Circular references will cause a RecursionError
+
+        :param in_schema: An openAPI schema with references
+        :return:
+        """
         # TODO: Multiple types
         out_schema = deepcopy(in_schema)
         if "$ref" in out_schema:
