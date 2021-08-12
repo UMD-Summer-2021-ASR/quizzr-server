@@ -1,9 +1,12 @@
+import atexit
 import json
 import logging
 import logging.handlers
+import multiprocessing
 import os
 import pprint
 import re
+import signal
 from copy import deepcopy
 from sys import exit
 from datetime import datetime
@@ -36,6 +39,8 @@ DEV_ENV_NAME = "development"
 PROD_ENV_NAME = "production"
 TEST_ENV_NAME = "testing"
 
+created_process = False
+
 
 def create_app(test_overrides: dict = None, test_inst_path: str = None):
     """
@@ -45,6 +50,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     :param test_inst_path: The instance path of the server. Has the highest overriding priority
     :return: The data flow server as a Flask app
     """
+    global created_process
+
     instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
         or os.path.expanduser(os.path.join("~", "quizzr_server"))
     app = Flask(
@@ -58,10 +65,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     log_path = os.path.join(log_dir, "sv_log.log")
     handler = logging.handlers.TimedRotatingFileHandler(log_path, when='midnight', backupCount=7)
     app.logger.addHandler(handler)
-    app.logger.info(f"Initialized server with instance path '{instance_path}'")
+    app.logger.info(f"Instantiated server with instance path '{instance_path}'")
     CORS(app)
+    app.logger.info("Creating instance directory...")
     server_dir = os.path.dirname(__file__)
     os.makedirs(app.instance_path, exist_ok=True)
+    app.logger.info("Created instance directory")
+    app.logger.info("Configuring server instance...")
     path = app.instance_path
     default_config = {
         "UNPROC_FIND_LIMIT": 32,
@@ -119,9 +129,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     if test_overrides:
         app_conf.update(test_overrides)
 
-    rec_dir = os.path.join(app.instance_path, "storage", "queue")
+    rec_dir = os.path.join(app.instance_path, "storage", "recordings")
     if not os.path.exists(rec_dir):
         os.makedirs(rec_dir)
+
+    queue_dir = os.path.join(rec_dir, "queue")
 
     secret_dir = os.path.join(app.instance_path, "secrets")
     if not os.path.exists(secret_dir):
@@ -133,17 +145,69 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     app.config.from_mapping(app_conf)
     if app.config["DEFAULT_LEADERBOARD_SIZE"] > app.config["MAX_LEADERBOARD_SIZE"]:
         app.logger.critical("Configured default leaderboard size must not exceed maximum leaderboard size.")
+    app.logger.info("Finished configuring server instance")
+
     app.logger.info("Initializing third-party services...")
     app.logger.info(f"MongoDB Database Name = '{app_conf['DATABASE']}'")
     app.logger.info(f"Firebase Blob Root = '{app_conf['BLOB_ROOT']}'")
     app.logger.info(f"Environment set to '{app_conf['Q_ENV']}'")
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, secret_dir, rec_dir, api)
-    qp = rec_processing.QuizzrProcessor(
-        qtpm.database,
-        rec_dir,
-        app_conf["PROC_CONFIG"],
-        app_conf["SUBMISSION_FILE_TYPES"]
-    )
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, api, os.path.join(secret_dir, "firebase_storage_key.json"))
+    app.logger.info("Initialized third-party services")
+
+    app.logger.info("Initializing pre-screening program...")
+    # app.logger.debug("Instantiating QuizzrProcessorHead...")
+    # qph = rec_processing.QuizzrProcessorHead(
+    #     qtpm,
+    #     rec_dir,
+    #     app_conf["PROC_CONFIG"],
+    #     app_conf["SUBMISSION_FILE_TYPES"]
+    # )
+    # app.logger.debug("Finished instantiating QuizzrProcessorHead")
+    # app.logger.debug("Instantiating QuizzrWatcher...")
+    # qw = rec_processing.QuizzrWatcher(os.path.join(rec_dir, "queue"), qph.execute)
+    # app.logger.debug("Finished instantiating QuizzrWatcher")
+    app.logger.debug("Instantiating process...")
+    # qw_process = multiprocessing.Process(target=qw.execute)
+    queue = multiprocessing.Queue()
+    qw_process = multiprocessing.Process(target=rec_processing.start_watcher, kwargs={
+        "db_name": app_conf["DATABASE"],
+        "tpm_config": app_conf,
+        "firebase_app_specifier": qtpm.app,
+        "api": api,
+        "rec_dir": rec_dir,
+        "queue_dir": queue_dir,
+        "proc_config": app_conf["PROC_CONFIG"],
+        "submission_file_types": app_conf["SUBMISSION_FILE_TYPES"],
+        "queue": queue
+    })
+    qw_process.daemon = True
+    app.logger.debug("Finished instantiating process")
+    # app.logger.debug("Registering exit handler...") #
+    # atexit.register(qw_process.join) #
+    # app.logger.debug("Finished registering exit handler") #
+    # app.logger.debug("Registering signal handler...")
+    # print("This is a test message 1")
+    #
+    # def shutdown_server(signal_, frame):
+    #     # qw.done = True
+    #     qw_process.terminate()
+    #     signal.signal(signal.SIGINT, old_sig_handler)
+    #     signal.raise_signal(signal_)
+    #     # shutdown_func() *
+    #
+    # if not created_process:
+    #     old_sig_handler = signal.signal(signal.SIGINT, shutdown_server)
+    #     created_process = True
+    # # shutdown_func = request.environ.get("werkzeug.server.shutdown") *
+    # # if shutdown_func is None: *
+    # #     raise RuntimeError("Werkzeug server shutdown function not found") *
+    # # signal.signal(signal.SIGINT, shutdown_server)
+    # print("This is a test message 2")
+    # app.logger.debug("Finished registering signal handler")
+    app.logger.debug("Starting process...")
+    qw_process.start()
+    print("This is a test message 3")
+    app.logger.info("Finished pre-screening program initialization")
     socket_server_key = {}
 
     pprinter = pprint.PrettyPrinter()
@@ -348,77 +412,101 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 app.logger.debug("Field 'sentenceId' not specified in batch submission")
                 metadata["__sentenceIndex"] = i
 
-            submission_name = _save_recording(rec_dir, recording, metadata)
+            submission_name = _save_recording(queue_dir, recording, metadata)
             _debug_variable("submission_name", submission_name)
 
             submission_names.append(submission_name)
-        try:
-            results = qp.pick_submissions(
-                rec_processing.QuizzrWatcher.queue_submissions(
-                    app.config["REC_DIR"],
-                    size_limit=app.config["PROC_CONFIG"]["queueLimit"]
-                )
-            )
-        except BrokenPipeError as e:
-            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+        # TODO: Handle files being processed in an arbitrary order
+        app.logger.info("Awaiting result...")
+        pre_screen_successful = True
+        while submission_names:
+            _debug_variable("submission_names", submission_names)
+            result = queue.get(True, 3600)  # Block for at most 1 hour for now.
+            app.logger.info("Received submission. Evaluating name...")
+            _debug_variable("queue.get()", result)
+            if result["name"] in submission_names:
+                app.logger.info("Name matches. Removing from list and evaluating if pre-screen is successful")
+                submission_names.remove(result["name"])
+                if result["case"] == "rejected":
+                    app.logger.info("Submission was rejected. Returning result")
+                    pre_screen_successful = False
+                    break
+                app.logger.info("Submission was accepted. Continuing...")
+            else:
+                # TODO: REALLY consider not doing this in the future.
+                app.logger.info("Name does not match. Pushing back onto queue")
+                queue.put(result)
 
-        # Split by recType
-        app.logger.info("Preparing results for upload...")
-        file_paths = {}
-        for submission in results:
-            file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
-            if results[submission]["case"] == "accepted":
-                sub_rec_type = results[submission]["metadata"]["recType"]
-                if sub_rec_type not in file_paths:
-                    file_paths[sub_rec_type] = []
-                file_paths[sub_rec_type].append(file_path)
+        app.logger.info(f"Finished evaluating results. Final Result: {pre_screen_successful}")
+        return {"prescreenSuccessful": pre_screen_successful}, HTTPStatus.ACCEPTED
 
-        _debug_variable("file_paths", file_paths)
-
-        # Upload files
-        try:
-            file2blob = {}
-            for rt, paths in file_paths.items():  # Organize by recType
-                file2blob.update(qtpm.upload_many(paths, rt))
-        except BrokenPipeError as e:
-            app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
-            return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
-
-        _debug_variable("file2blob", file2blob)
-
-        # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
-        sub2meta = {}
-        sub2vtt = {}
-
-        for submission in results:
-            doc = results[submission]
-            if doc["case"] == "accepted":
-                sub2meta[submission] = doc["metadata"]
-                if "vtt" in doc:
-                    sub2vtt[submission] = doc.get("vtt")
-
-        # Upload submission metadata to MongoDB
-        qtpm.mongodb_insert_submissions(
-            sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
-            sub2meta=sub2meta,
-            sub2vtt=sub2vtt
-        )
-
-        app.logger.info("Evaluating outcome of pre-screen...")
-
-        for submission in results:
-            app.logger.info(f"Removing submission with name '{submission}'")
-            rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
-
-        for submission_name in submission_names:
-            if results[submission_name]["case"] == "rejected":
-                return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
-
-            if results[submission_name]["case"] == "err":
-                return results[submission_name]["err"], HTTPStatus.INTERNAL_SERVER_ERROR
-
-        return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
+        # try:
+        #     results = qp.pick_submissions(
+        #         rec_processing.QuizzrWatcher.queue_submissions(
+        #             app.config["REC_DIR"],
+        #             size_limit=app.config["PROC_CONFIG"]["queueLimit"]
+        #         )
+        #     )
+        # except BrokenPipeError as e:
+        #     app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
+        #     return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+        #
+        # # Split by recType
+        # app.logger.info("Preparing results for upload...")
+        # file_paths = {}
+        # for submission in results:
+        #     file_path = os.path.join(app.config["REC_DIR"], submission) + ".wav"
+        #     if results[submission]["case"] == "accepted":
+        #         sub_rec_type = results[submission]["metadata"]["recType"]
+        #         if sub_rec_type not in file_paths:
+        #             file_paths[sub_rec_type] = []
+        #         file_paths[sub_rec_type].append(file_path)
+        #
+        # _debug_variable("file_paths", file_paths)
+        #
+        # # Upload files
+        # try:
+        #     file2blob = {}
+        #     for rt, paths in file_paths.items():  # Organize by recType
+        #         file2blob.update(qtpm.upload_many(paths, rt))
+        # except BrokenPipeError as e:
+        #     app.logger.error(f"Encountered BrokenPipeError: {e}. Aborting")
+        #     return "broken_pipe_error", HTTPStatus.INTERNAL_SERVER_ERROR
+        #
+        # _debug_variable("file2blob", file2blob)
+        #
+        # # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
+        # sub2meta = {}
+        # sub2vtt = {}
+        #
+        # for submission in results:
+        #     doc = results[submission]
+        #     if doc["case"] == "accepted":
+        #         sub2meta[submission] = doc["metadata"]
+        #         if "vtt" in doc:
+        #             sub2vtt[submission] = doc.get("vtt")
+        #
+        # # Upload submission metadata to MongoDB
+        # qtpm.mongodb_insert_submissions(
+        #     sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
+        #     sub2meta=sub2meta,
+        #     sub2vtt=sub2vtt
+        # )
+        #
+        # app.logger.info("Evaluating outcome of pre-screen...")
+        #
+        # for submission in results:
+        #     app.logger.info(f"Removing submission with name '{submission}'")
+        #     rec_processing.delete_submission(app.config["REC_DIR"], submission, app.config["SUBMISSION_FILE_TYPES"])
+        #
+        # for submission_name in submission_names:
+        #     if results[submission_name]["case"] == "rejected":
+        #         return {"prescreenSuccessful": False}, HTTPStatus.ACCEPTED
+        #
+        #     if results[submission_name]["case"] == "err":
+        #         return results[submission_name]["err"], HTTPStatus.INTERNAL_SERVER_ERROR
+        #
+        # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
     def handle_processing_results(arguments_batch: Dict[str, List[Dict[str, Any]]]):
         """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
