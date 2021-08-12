@@ -943,6 +943,15 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
         return {"successful": results.matched_count, "requested": len(session_results["users"])}
 
+    @app.route("/hls/vtt/<audio_id>", methods=["GET"])
+    def get_vtt(audio_id):
+        audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
+        if audio_doc is None or audio_doc["vtt"] is None:
+            abort(HTTPStatus.NOT_FOUND)
+        response = make_response(audio_doc["vtt"])
+        response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        return response
+
     @app.route("/leaderboard", methods=["GET"])
     def get_leaderboard():
         category = request.args.get("category") or "all"

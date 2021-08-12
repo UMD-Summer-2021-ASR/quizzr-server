@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.4.6
+  version: 0.4.7
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -324,6 +324,241 @@ paths:
       parameters: []
       security:
         - Firebase-Auth: []
+  /game_results:
+    put:
+      summary: Send Game Session Results
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  successful:
+                    type: integer
+                    description: The number of successful updates
+                  requested:
+                    type: integer
+                    description: The number of users included in the request body
+        '401':
+          description: Unauthorized
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error-Msg-JSON'
+      operationId: handle_game_results
+      description: Update the database with the results of a game session.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - properties:
+                    mode:
+                      $ref: '#/components/schemas/Game-Mode'
+                    category:
+                      type: string
+                      description: The subject category for this session
+                    users:
+                      type: object
+                      required:
+                        - <username>
+                      properties:
+                        <username>:
+                          type: object
+                          required:
+                            - questionStats
+                            - finished
+                            - won
+                          description: The update information for each `<username>`. Replace `<username>` with the name of the user you want to update.
+                          properties:
+                            questionStats:
+                              type: object
+                              required:
+                                - played
+                                - buzzed
+                                - correct
+                                - cumulativeProgressOnBuzz
+                              properties:
+                                played:
+                                  type: integer
+                                  description: The number of questions played
+                                buzzed:
+                                  type: integer
+                                  description: The number of times the user buzzed in
+                                correct:
+                                  type: integer
+                                  description: The number of times the user answered correctly
+                                cumulativeProgressOnBuzz:
+                                  type: object
+                                  description: The cumulative amount of progress through the question when the player buzzes in.
+                                  required:
+                                    - percentQuestionRead
+                                    - numSentences
+                                  properties:
+                                    percentQuestionRead:
+                                      type: number
+                                    numSentences:
+                                      type: number
+                            finished:
+                              type: boolean
+                              description: Whether the user finished playing this session
+                            won:
+                              type: boolean
+                              description: ''
+                  required:
+                    - mode
+                    - category
+                    - users
+                - properties:
+                    mode:
+                      $ref: '#/components/schemas/Game-Mode'
+                    categories:
+                      type: array
+                      description: The list of subject categories for this session
+                      items:
+                        type: string
+                    users:
+                      type: object
+                      required:
+                        - <username>
+                      properties:
+                        <username>:
+                          type: object
+                          required:
+                            - questionStats
+                            - finished
+                            - won
+                          description: The update information for each `<username>`. Replace `<username>` with the name of the user you want to update.
+                          properties:
+                            questionStats:
+                              type: object
+                              required:
+                                - played
+                                - buzzed
+                                - correct
+                                - cumulativeProgressOnBuzz
+                              properties:
+                                played:
+                                  type: object
+                                  required:
+                                    - <category>
+                                  description: The number of questions played for each category
+                                  properties:
+                                    <category>:
+                                      type: integer
+                                buzzed:
+                                  type: object
+                                  required:
+                                    - <category>
+                                  description: The number of times the user buzzed in to answer a question of a particular category
+                                  properties:
+                                    <category>:
+                                      type: integer
+                                correct:
+                                  type: object
+                                  required:
+                                    - <category>
+                                  description: The number of times the user correctly answered a question of a particular category
+                                  properties:
+                                    <category>:
+                                      type: integer
+                                cumulativeProgressOnBuzz:
+                                  type: object
+                                  required:
+                                    - percentQuestionRead
+                                    - numSentences
+                                  description: 'The cumulative amount of progress through the question when the player buzzes in, per category'
+                                  properties:
+                                    percentQuestionRead:
+                                      type: object
+                                      required:
+                                        - <category>
+                                      properties:
+                                        <category>:
+                                          type: number
+                                    numSentences:
+                                      type: object
+                                      required:
+                                        - <category>
+                                      properties:
+                                        <category>:
+                                          type: number
+                            finished:
+                              type: boolean
+                              description: Whether the user finished playing this session
+                            won:
+                              type: boolean
+                  required:
+                    - mode
+                    - categories
+                    - users
+              type: object
+        description: 'A document containing the results of the session, including the game mode, the categories, and the user profiles to update.'
+      parameters: []
+      security:
+        - Internal-Auth: []
+    parameters: []
+  '/hls/vtt/{audio_id}':
+    parameters:
+      - schema:
+          type: string
+        name: audio_id
+        in: path
+        required: true
+        description: The ID of an audio document
+    get:
+      summary: Get VTT
+      tags:
+        - internal
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VTT'
+        '404':
+          description: Not Found
+      operationId: get_vtt
+      description: Get a VTT from an audio document
+  /leaderboard:
+    get:
+      summary: Get Leaderboard
+      tags:
+        - frontend
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Basic-Profile'
+      operationId: get_leaderboard
+      description: Get the leaderboard of users who participated in ranked games
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: category
+          description: The subject category to filter by
+        - schema:
+            type: integer
+            maximum: 200
+          in: query
+          name: size
+          description: Display the top `<size>` players
   /profile:
     get:
       summary: Get Private Profile
@@ -851,32 +1086,6 @@ paths:
                       recDifficulty: 4
         description: A batch of unrecorded question documents.
       parameters: []
-  /validate:
-    get:
-      summary: Verify Firebase ID Token
-      tags:
-        - internal
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  subject:
-                    $ref: '#/components/schemas/Permission-Level'
-                  extra:
-                    type: object
-                    description: Always empty
-                required:
-                  - subject
-                  - extra
-              examples: {}
-        '401':
-          description: Unauthorized
-      operationId: check_token
-      description: 'Attempts to validate the Firebase ID token given in the Authorization header. Note: The same behavior occurs with `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `TRACE`.'
   /socket/key:
     post:
       summary: Generate Socket Server Key
@@ -906,12 +1115,11 @@ paths:
 
         **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
     parameters: []
-  /game_results:
-    put:
-      summary: Send Game Session Results
+  /validate:
+    get:
+      summary: Verify Firebase ID Token
       tags:
         - internal
-        - qb-pipeline
       responses:
         '200':
           description: OK
@@ -920,204 +1128,19 @@ paths:
               schema:
                 type: object
                 properties:
-                  successful:
-                    type: integer
-                    description: The number of successful updates
-                  requested:
-                    type: integer
-                    description: The number of users included in the request body
+                  subject:
+                    $ref: '#/components/schemas/Permission-Level'
+                  extra:
+                    type: object
+                    description: Always empty
+                required:
+                  - subject
+                  - extra
+              examples: {}
         '401':
           description: Unauthorized
-        '404':
-          description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg-JSON'
-      operationId: handle_game_results
-      description: Update the database with the results of a game session.
-      requestBody:
-        content:
-          application/json:
-            schema:
-              oneOf:
-                - properties:
-                    mode:
-                      $ref: '#/components/schemas/Game-Mode'
-                    category:
-                      type: string
-                      description: The subject category for this session
-                    users:
-                      type: object
-                      required:
-                        - <username>
-                      properties:
-                        <username>:
-                          type: object
-                          required:
-                            - questionStats
-                            - finished
-                            - won
-                          description: The update information for each `<username>`. Replace `<username>` with the name of the user you want to update.
-                          properties:
-                            questionStats:
-                              type: object
-                              required:
-                                - played
-                                - buzzed
-                                - correct
-                                - cumulativeProgressOnBuzz
-                              properties:
-                                played:
-                                  type: integer
-                                  description: The number of questions played
-                                buzzed:
-                                  type: integer
-                                  description: The number of times the user buzzed in
-                                correct:
-                                  type: integer
-                                  description: The number of times the user answered correctly
-                                cumulativeProgressOnBuzz:
-                                  type: object
-                                  description: The cumulative amount of progress through the question when the player buzzes in.
-                                  required:
-                                    - percentQuestionRead
-                                    - numSentences
-                                  properties:
-                                    percentQuestionRead:
-                                      type: number
-                                    numSentences:
-                                      type: number
-                            finished:
-                              type: boolean
-                              description: Whether the user finished playing this session
-                            won:
-                              type: boolean
-                              description: ''
-                  required:
-                    - mode
-                    - category
-                    - users
-                - properties:
-                    mode:
-                      $ref: '#/components/schemas/Game-Mode'
-                    categories:
-                      type: array
-                      description: The list of subject categories for this session
-                      items:
-                        type: string
-                    users:
-                      type: object
-                      required:
-                        - <username>
-                      properties:
-                        <username>:
-                          type: object
-                          required:
-                            - questionStats
-                            - finished
-                            - won
-                          description: The update information for each `<username>`. Replace `<username>` with the name of the user you want to update.
-                          properties:
-                            questionStats:
-                              type: object
-                              required:
-                                - played
-                                - buzzed
-                                - correct
-                                - cumulativeProgressOnBuzz
-                              properties:
-                                played:
-                                  type: object
-                                  required:
-                                    - <category>
-                                  description: The number of questions played for each category
-                                  properties:
-                                    <category>:
-                                      type: integer
-                                buzzed:
-                                  type: object
-                                  required:
-                                    - <category>
-                                  description: The number of times the user buzzed in to answer a question of a particular category
-                                  properties:
-                                    <category>:
-                                      type: integer
-                                correct:
-                                  type: object
-                                  required:
-                                    - <category>
-                                  description: The number of times the user correctly answered a question of a particular category
-                                  properties:
-                                    <category>:
-                                      type: integer
-                                cumulativeProgressOnBuzz:
-                                  type: object
-                                  required:
-                                    - percentQuestionRead
-                                    - numSentences
-                                  description: 'The cumulative amount of progress through the question when the player buzzes in, per category'
-                                  properties:
-                                    percentQuestionRead:
-                                      type: object
-                                      required:
-                                        - <category>
-                                      properties:
-                                        <category>:
-                                          type: number
-                                    numSentences:
-                                      type: object
-                                      required:
-                                        - <category>
-                                      properties:
-                                        <category>:
-                                          type: number
-                            finished:
-                              type: boolean
-                              description: Whether the user finished playing this session
-                            won:
-                              type: boolean
-                  required:
-                    - mode
-                    - categories
-                    - users
-              type: object
-        description: 'A document containing the results of the session, including the game mode, the categories, and the user profiles to update.'
-      parameters: []
-      security:
-        - Internal-Auth: []
-    parameters: []
-  /leaderboard:
-    get:
-      summary: Get Leaderboard
-      tags:
-        - frontend
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Basic-Profile'
-      operationId: get_leaderboard
-      description: Get the leaderboard of users who participated in ranked games
-      parameters:
-        - schema:
-            type: string
-          in: query
-          name: category
-          description: The subject category to filter by
-        - schema:
-            type: integer
-            maximum: 200
-          in: query
-          name: size
-          description: Display the top `<size>` players
+      operationId: check_token
+      description: 'Attempts to validate the Firebase ID token given in the Authorization header. Note: The same behavior occurs with `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `TRACE`.'
 components:
   schemas:
     Audio-Id:
