@@ -39,12 +39,13 @@ PROD_ENV_NAME = "production"
 TEST_ENV_NAME = "testing"
 
 
-def create_app(test_overrides: dict = None, test_inst_path: str = None):
+def create_app(test_overrides: dict = None, test_inst_path: str = None, test_storage_root: str = None):
     """
     App factory function for the data flow server
 
     :param test_overrides: A set of overrides to merge on top of the server's configuration
     :param test_inst_path: The instance path of the server. Has the highest overriding priority
+    :param test_storage_root: The root directory to use in place of the "storage" directory
     :return: The data flow server as a Flask app
     """
 
@@ -55,7 +56,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         instance_relative_config=True,
         instance_path=instance_path
     )
-    log_dir = os.path.join(app.instance_path, "storage", "logs")
+    storage_root = test_storage_root or os.environ.get("Q_STG_ROOT") or os.path.join(app.instance_path, "storage")
+    log_dir = os.path.join(storage_root, "logs")
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     log_path = os.path.join(log_dir, "sv_log.log")
@@ -126,7 +128,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
     if test_overrides:
         app_conf.update(test_overrides)
 
-    rec_dir = os.path.join(app.instance_path, "storage", "recordings")
+    rec_dir = os.path.join(storage_root, "recordings")
     if not os.path.exists(rec_dir):
         os.makedirs(rec_dir)
 
@@ -234,6 +236,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
             sentence_ids = request.form.getlist("sentenceId")
             diarization_metadata_list = request.form.getlist("diarMetadata")
             rec_types = request.form.getlist("recType")
+
+            _debug_variable("recordings", recordings)
+            _debug_variable("qb_ids", qb_ids)
+            _debug_variable("sentence_ids", sentence_ids)
+            _debug_variable("diarization_metadata_list", diarization_metadata_list)
+            _debug_variable("rec_types", rec_types)
 
             if not (len(recordings) == len(rec_types)
                     and (not qb_ids or len(recordings) == len(qb_ids))
@@ -350,8 +358,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         """
         valid_rec_types = ["normal", "buzz", "answer"]
 
-        # submission_names = []
         pointers = []
+        submissions = []
 
         for i in range(len(recordings)):
             recording = recordings[i]
@@ -397,15 +405,20 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
                 app.logger.debug("Field 'sentenceId' not specified in batch submission")
                 metadata["__sentenceIndex"] = i
 
-            submission_name = _save_recording(queue_dir, recording, metadata)
+            submissions.append((recording, metadata))
+
+        if len(submissions) == 1:
+            submission_names = [_save_recording(queue_dir, *submissions[0])]
+        else:
+            submission_names = _save_recording_batch(queue_dir, submissions)
+
+        for submission_name in submission_names:
             _debug_variable("submission_name", submission_name)
             pointer = token_urlsafe(64)
             expiry = datetime.now() + timedelta(minutes=30)
             ps_doc = {"pointer": pointer, "name": submission_name, "status": "running", "expiry": expiry}
             prescreen_statuses.append(ps_doc)
             pointers.append(pointer)
-
-            # submission_names.append(submission_name)
 
         return {"prescreenPointers": pointers}, HTTPStatus.ACCEPTED
         # TODO: Handle files being processed in an arbitrary order
@@ -1215,7 +1228,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         Upload a batch of unrecorded questions.
 
         :param arguments_batch: A dictionary containing the list of "arguments"
-        :return: A "msg" stating that the upload was successful if nothing went wrong
+        :return: A dictionary containing a "msg" stating that the upload was successful if nothing went wrong
         """
         arguments_list = arguments_batch["arguments"]
         _debug_variable("arguments_list", arguments_list)
@@ -1252,7 +1265,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
 
     def _get_next_submission_name():
         """Return a filename safe date-timestamp of the current system time"""
-        return str(datetime.now().strftime("%Y.%m.%d %H.%M.%S.%f"))
+        return str(datetime.now().strftime("%Y.%m.%d_%H.%M.%S.%f"))
 
     def _save_recording(directory: str, recording: werkzeug.datastructures.FileStorage, metadata: dict):
         """Write a WAV file and its JSON metadata to disk."""
@@ -1265,10 +1278,35 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
 
         app.logger.info("Writing metadata...")
         _debug_variable("metadata", metadata)
-        with open(submission_path + ".json", "w") as transaction_f:
-            transaction_f.write(bson.json_util.dumps(metadata))
+        with open(submission_path + ".json", "w") as meta_f:
+            meta_f.write(bson.json_util.dumps(metadata))
         app.logger.info("Successfully wrote metadata")
         return submission_name
+
+    def _save_recording_batch(directory: str, submissions: List[Tuple[werkzeug.datastructures.FileStorage, dict]]):
+        """Write a batch of WAV files and their associated JSON metadata to disk."""
+        app.logger.info("Saving recordings...")
+        base_submission_name = _get_next_submission_name()
+        _debug_variable("base_submission_name", base_submission_name)
+        submission_names = []
+
+        for i, submission in enumerate(submissions):
+            recording, metadata = submission
+            app.logger.info("Saving audio...")
+            submission_name = f"{base_submission_name}_b{i}"
+            _debug_variable("submission_name", submission_name)
+            submission_path = os.path.join(directory, submission_name)
+            recording.save(submission_path + ".wav")
+            app.logger.info("Saved audio successfully")
+
+            app.logger.info("Writing metadata...")
+            _debug_variable("metadata", metadata)
+            with open(submission_path + ".json", "w") as meta_f:
+                meta_f.write(bson.json_util.dumps(metadata))
+            app.logger.info("Successfully wrote metadata")
+            submission_names.append(submission_name)
+
+        return submission_names
 
     def _verify_id_token():
         """Try to decode the token if provided. If in a production environment, forbid access when the decode fails.

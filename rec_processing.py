@@ -2,6 +2,7 @@ import atexit
 import logging
 import multiprocessing
 import os
+import pprint
 import re
 import signal
 
@@ -17,8 +18,11 @@ import vtt_conversion
 from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
 
-
 logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
+
+BATCH_SUBMISSION_REGEX = re.compile(r"(.+)b\d$")
+PUNC_REGEX = re.compile(r"[.?!,;:\"\-]")
+WHITESPACE_REGEX = re.compile(r"\s+")
 
 
 class QuizzrWatcher:
@@ -152,9 +156,6 @@ class QuizzrProcessor:
         self.unrec_questions = database.UnrecordedQuestions
         self.audio = database.Audio
         self.unproc_audio = database.UnprocessedAudio
-
-        self.punc_regex = re.compile(r"[.?!,;:\"\-]")
-        self.whitespace_regex = re.compile(r"\s+")
         self.ERROR_ACCURACY = -1.0
 
     def pick_submissions(self, submissions: List[str]) -> dict:
@@ -176,22 +177,52 @@ class QuizzrProcessor:
         final_results = {}
         num_accepted_submissions = 0
         if "normal" in typed_submissions:
-            results = self.preprocess_submissions(typed_submissions['normal'], sub2meta)
-            for submission in typed_submissions['normal']:
-                if "err" in results[submission]:
-                    final_results[submission] = {"case": "err", "err": results[submission]["err"]}
-                elif results[submission]["accuracy"] < self.config["minAccuracy"]:
-                    final_results[submission] = {"case": "rejected", "accuracy": results[submission]["accuracy"]}
-                    self.logger.info(f"Removing submission with name '{submission}'")
-                    delete_submission(self.DIRECTORY, submission, self.submission_file_types)
+            preprocess_list = QuizzrProcessor.bundle_submissions(typed_submissions["normal"])
+            results = self.preprocess_submissions(preprocess_list, sub2meta)
+            # for submission in typed_submissions['normal']:
+            for submission, result in results:
+                if type(submission) is list:
+                    for i, batch_item in enumerate(submission):
+                        if "err" in result:
+                            if result["submissionName"] == batch_item:
+                                final_results[batch_item] = {"case": "err", "err": result["err"]}
+                            else:
+                                final_results[batch_item] = {"case": "rejected", "reason": "error_in_batch"}
+                        elif result["accuracy"] < self.config["minAccuracy"]:
+                            final_results[batch_item] = {
+                                "case": "rejected",
+                                "accuracy": result["accuracy"],
+                                "metadata": sub2meta[batch_item]
+                            }
+                        else:
+                            final_results[batch_item] = {
+                                "case": "accepted",
+                                "vtt": result["vtt"][i],
+                                "metadata": sub2meta[batch_item],
+                                "accuracy": result["accuracy"]
+                            }
                 else:
-                    final_results[submission] = {
-                        "case": "accepted",
-                        "vtt": results[submission]["vtt"],
-                        "metadata": sub2meta[submission],
-                        "accuracy": results[submission]["accuracy"]
-                    }
-                    num_accepted_submissions += 1
+                    if "err" in result:
+                        final_results[submission] = {"case": "err", "err": result["err"]}
+                    elif result["accuracy"] < self.config["minAccuracy"]:
+                        final_results[submission] = {
+                            "case": "rejected",
+                            "accuracy": result["accuracy"],
+                            "metadata": sub2meta[submission]
+                        }
+                        # self.logger.info(f"Removing submission with name '{submission}'")
+                        # delete_submission(self.DIRECTORY, submission, self.submission_file_types)
+                    else:
+                        final_results[submission] = {
+                            "case": "accepted",
+                            "vtt": result["vtt"],
+                            "metadata": sub2meta[submission],
+                            "accuracy": result["accuracy"]
+                        }
+                        num_accepted_submissions += 1
+            self.logger.debug(f"final_results = {pprint.pformat(final_results)}")
+
+            # NOTE: This number is currently inaccurate with batch submissions.
             self.logger.info(f"Accepted {num_accepted_submissions} of {len(typed_submissions['normal'])} submission(s)")
 
         if "buzz" in typed_submissions:
@@ -212,8 +243,8 @@ class QuizzrProcessor:
         return final_results
 
     def preprocess_submissions(self,
-                               submissions: List[str],
-                               sub2meta: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, Union[float, str]]]:
+                               submissions: List[Union[List[str], str]],
+                               sub2meta: Dict[str, Dict[str, str]]):
         """
         Return the accuracy and VTT data of each submission.
 
@@ -227,107 +258,280 @@ class QuizzrProcessor:
         self.logger.info(f"Evaluating {len(submissions)} submission(s)...")
 
         num_finished_submissions = 0
-        results = {}
+        # results = {}
+        # for submission in submissions:
+        #     results[submission] = {}
+        #     file_path = os.path.join(self.DIRECTORY, submission)
+        #     wav_file_path = file_path + ".wav"
+        #     # json_file_path = file_path + ".json"
+        #     if submission not in sub2meta:
+        #         self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
+        #         results[submission]["err"] = "meta_not_found"
+        #         continue
+        #     metadata = sub2meta[submission]
+        #     qid = metadata.get("qb_id")
+        #     self.logger.debug(f"{type(qid)} qid = {qid!r}")
+        #
+        #     if qid is None:
+        #         self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
+        #         results[submission]["err"] = "qid_not_found"
+        #         continue
+        #
+        #     query = {"qb_id": qid}
+        #
+        #     sid = metadata.get("sentenceId")
+        #     self.logger.debug(f"{type(sid)} sid = {sid!r}")
+        #     if sid is None:
+        #         self.logger.debug(f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
+        #         # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
+        #         # results[submission]["err"] = "sid_not_found"
+        #         # continue
+        #     else:
+        #         query["sentenceId"] = sid
+        #
+        #     self.logger.debug("Finding question in UnrecordedQuestions...")
+        #     question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+        #     if question is None:
+        #         self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
+        #         question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+        #
+        #     if question is None:
+        #         self.logger.error("Question not found. Skipping submission")
+        #         results[submission]["err"] = "sentence_not_found"
+        #         continue
+        #
+        #     r_transcript = question.get("transcript")
+        #     self.logger.debug(f"r_transcript = {r_transcript!r}")
+        #
+        #     if r_transcript is None:
+        #         self.logger.error("Transcript not found. Skipping submission")
+        #         results[submission]["err"] = "transcript_not_found"
+        #         continue
+        #
+        #     # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
+        #     if "__sentenceIndex" in metadata:
+        #         self.logger.info("Attempting transcript segmentation...")
+        #         if "tokenizations" in question:
+        #             slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+        #             r_transcript = r_transcript[slice_start:slice_end]
+        #         else:
+        #             self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
+        #
+        #     self.logger.debug(f"r_transcript = {r_transcript!r}")
+        #
+        #     aligned_words, num_words, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
+        #     accuracy = aligned_words / num_words
+        #     if accuracy is None:
+        #         results[submission]["err"] = "runtime_error"
+        #         continue
+        #     # accuracy = self.ACCURACY_CUTOFF
+        #     # accuracy = random.random()
+        #
+        #     results[submission]["accuracy"] = accuracy
+        #     results[submission]["vtt"] = vtt
+        #
+        #     num_finished_submissions += 1
+        #
+        #     self.logger.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
+        #     self.logger.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
+        results = []
         for submission in submissions:
-            results[submission] = {}
-            file_path = os.path.join(self.DIRECTORY, submission)
-            wav_file_path = file_path + ".wav"
+            # file_path = os.path.join(self.DIRECTORY, submission)
+            # wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
-            if sub2meta.get(submission) is None:
-                self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
-                results[submission]["err"] = "meta_not_found"
-                continue
-            metadata = sub2meta[submission]
-            qid = metadata.get("qb_id")
-            self.logger.debug(f"{type(qid)} qid = {qid!r}")
+            # if submission not in sub2meta:
+            #     self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
+            #     results.append((submission, {"err": "metadata_not_found"}))
+            #     continue
+            # metadata = sub2meta[submission]
+            # qid = metadata.get("qb_id")
+            # self.logger.debug(f"{type(qid)} qid = {qid!r}")
+            #
+            # if qid is None:
+            #     self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
+            #     results.append((submission, {"err": "qid_not_found"}))
+            #     continue
+            #
+            # query = {"qb_id": qid}
+            #
+            # sid = metadata.get("sentenceId")
+            # self.logger.debug(f"{type(sid)} sid = {sid!r}")
+            # if sid is None:
+            #     self.logger.debug(
+            #         f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
+            #     # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
+            #     # results[submission]["err"] = "sid_not_found"
+            #     # continue
+            # else:
+            #     query["sentenceId"] = sid
+            #
+            # self.logger.debug("Finding question in UnrecordedQuestions...")
+            # question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+            # if question is None:
+            #     self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
+            #     question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+            #
+            # if question is None:
+            #     self.logger.error("Question not found. Skipping submission")
+            #     results.append((submission, {"err": "sentence_not_found"}))
+            #     continue
+            #
+            # r_transcript = question.get("transcript")
+            # self.logger.debug(f"r_transcript = {r_transcript!r}")
+            #
+            # if r_transcript is None:
+            #     self.logger.error("Transcript not found. Skipping submission")
+            #     results.append((submission, {"err": "transcript_not_found"}))
+            #     continue
+            #
+            # # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
+            # if "__sentenceIndex" in metadata:
+            #     self.logger.info("Attempting transcript segmentation...")
+            #     if "tokenizations" in question:
+            #         slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+            #         r_transcript = r_transcript[slice_start:slice_end]
+            #     else:
+            #         self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
+            #
+            # self.logger.debug(f"r_transcript = {r_transcript!r}")
+            #
+            # try:
+            #     aligned_words, num_words, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
+            # except RuntimeError as e:
+            #     self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
+            #     results.append((submission, {"err": "runtime_error", "extra": str(e)}))
+            #     continue
+            # accuracy = aligned_words / num_words
+            # # if accuracy is None:
+            # #     results[submission]["err"] = "runtime_error"
+            # #     continue
+            # # accuracy = self.ACCURACY_CUTOFF
+            # # accuracy = random.random()
+            #
+            # results.append((submission, {"accuracy": accuracy, "vtt": vtt}))
+            if type(submission) is list:
+                total_accuracy_fraction = [0, 0]
+                vtt_list = []
+                batch_has_error = False
+                for batch_item in submission:
+                    if batch_item not in sub2meta:
+                        self.logger.error(f"Metadata for submission '{batch_item}' not found. Skipping batch")
+                        results.append((submission, {"err": "metadata_not_found", "submissionName": batch_item}))
+                        batch_has_error = True
+                        break
+                    result = self.preprocess_one_submission(batch_item, sub2meta[batch_item])
+                    if "err" in result:
+                        self.logger.error(f"Error encountered in batch {submission}. Skipping batch")
+                        results.append((submission, {**result, "submissionName": batch_item}))
+                        batch_has_error = True
+                        break
+                    total_accuracy_fraction[0] += result["accuracyFraction"][0]
+                    total_accuracy_fraction[1] += result["accuracyFraction"][1]
+                    vtt_list.append(result["vtt"])
 
-            if qid is None:
-                self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
-                results[submission]["err"] = "qid_not_found"
-                continue
+                if batch_has_error:
+                    continue
 
-            query = {"qb_id": qid}
-
-            sid = metadata.get("sentenceId")
-            self.logger.debug(f"{type(sid)} sid = {sid!r}")
-            if sid is None:
-                self.logger.debug(f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
-                # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
-                # results[submission]["err"] = "sid_not_found"
-                # continue
+                accuracy = total_accuracy_fraction[0] / total_accuracy_fraction[1]
+                results.append((submission, {
+                    "accuracy": accuracy,
+                    "vtt": vtt_list
+                }))
             else:
-                query["sentenceId"] = sid
-
-            self.logger.debug("Finding question in UnrecordedQuestions...")
-            question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
-            if question is None:
-                self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
-                question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
-
-            if question is None:
-                self.logger.error("Question not found. Skipping submission")
-                results[submission]["err"] = "sentence_not_found"
-                continue
-
-            r_transcript = question.get("transcript")
-            self.logger.debug(f"r_transcript = {r_transcript!r}")
-
-            if r_transcript is None:
-                self.logger.error("Transcript not found. Skipping submission")
-                results[submission]["err"] = "transcript_not_found"
-                continue
-
-            # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
-            if "__sentenceIndex" in metadata:
-                self.logger.info("Attempting transcript segmentation...")
-                if "tokenizations" in question:
-                    slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
-                    r_transcript = r_transcript[slice_start:slice_end]
-                else:
-                    self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
-
-            self.logger.debug(f"r_transcript = {r_transcript!r}")
-
-            accuracy, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
-            if accuracy is None:
-                results[submission]["err"] = "runtime_error"
-                continue
-            # accuracy = self.ACCURACY_CUTOFF
-            # accuracy = random.random()
+                if submission not in sub2meta:
+                    self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
+                    results.append((submission, {"err": "metadata_not_found"}))
+                    continue
+                result = self.preprocess_one_submission(submission, sub2meta[submission])
+                accuracy = result["accuracyFraction"][0] / result["accuracyFraction"][1]
+                results.append((submission, {"accuracy": accuracy, "vtt": result["vtt"]}))
 
             num_finished_submissions += 1
 
             self.logger.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
             self.logger.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
-            results[submission]["accuracy"] = accuracy
-            results[submission]["vtt"] = vtt
         return results
+
+    def preprocess_one_submission(self, submission: str, metadata: dict):
+        file_path = os.path.join(self.DIRECTORY, submission)
+        wav_file_path = file_path + ".wav"
+        qid = metadata.get("qb_id")
+        self.logger.debug(f"{type(qid)} qid = {qid!r}")
+
+        if qid is None:
+            self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
+            return {"err": "qid_not_found"}
+
+        query = {"qb_id": qid}
+
+        sid = metadata.get("sentenceId")
+        self.logger.debug(f"{type(sid)} sid = {sid!r}")
+        if sid is None:
+            self.logger.debug(
+                f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
+            # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
+            # results[submission]["err"] = "sid_not_found"
+            # continue
+        else:
+            query["sentenceId"] = sid
+
+        self.logger.debug("Finding question in UnrecordedQuestions...")
+        question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+        if question is None:
+            self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
+            question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+
+        if question is None:
+            self.logger.error("Question not found. Skipping submission")
+            return {"err": "sentence_not_found"}
+
+        r_transcript = question.get("transcript")
+        self.logger.debug(f"r_transcript = {r_transcript!r}")
+
+        if r_transcript is None:
+            self.logger.error("Transcript not found. Skipping submission")
+            return {"err": "transcript_not_found"}
+
+        # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
+        if "__sentenceIndex" in metadata:
+            self.logger.info("Attempting transcript segmentation...")
+            if "tokenizations" in question:
+                slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+                r_transcript = r_transcript[slice_start:slice_end]
+            else:
+                self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
+
+        self.logger.debug(f"r_transcript = {r_transcript!r}")
+
+        try:
+            aligned_words, num_words, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
+        except RuntimeError as e:
+            self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
+            return {"err": "runtime_error", "extra": str(e)}
+
+        return {"accuracyFraction": (aligned_words, num_words), "vtt": vtt}
 
     # ****************** HELPER METHODS *********************
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
         """
-        Do a forced alignment and return the percentage of words aligned (or known) along with the VTT.
+        Do a forced alignment and return the number of aligned words, the total number of words, and the VTT as a tuple.
 
         :param file_path: The path to the WAV file
         :param r_transcript: The transcript to use as a reference
         :return: A tuple containing the accuracy and the VTT or None, None if a RuntimeError occurred.
         """
-        try:
-            alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
-        except RuntimeError as e:
-            self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
-            return None, None
+        alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         words = alignment.words
         # total_words = len(self.process_transcript(r_transcript))
         total_words = len(words)
-        total_aligned_words = 0
+        aligned_words = 0
         for word_data in words:
             unk = self.config["checkUnk"] and word_data.alignedWord == self.config["unkToken"]
             if word_data.case == "success" and not unk:
-                total_aligned_words += 1
+                aligned_words += 1
         vtt = vtt_conversion.gentle_alignment_to_vtt(words)
 
-        return total_aligned_words / total_words, vtt
+        return aligned_words, total_words, vtt
 
     def process_transcript(self, t: str) -> List[str]:
         """
@@ -336,7 +540,7 @@ class QuizzrProcessor:
         :param t: The transcript to process
         :return: A list containing every word without punctuation and purely lowercase
         """
-        return re.split(self.whitespace_regex, re.sub(self.punc_regex, " ", t).lower())
+        return re.split(WHITESPACE_REGEX, re.sub(PUNC_REGEX, " ", t).lower())
 
     def get_metadata(self, submissions: List[str]) -> Dict[str, Dict[str, str]]:
         """
@@ -370,6 +574,39 @@ class QuizzrProcessor:
                 typed_submissions[submission_type] = []
             typed_submissions[submission_type].append(submission)
         return typed_submissions
+
+    @staticmethod
+    def bundle_submissions(submissions):
+        """Return a list where submissions that end with "b<number>" are grouped by their base name and where standalone
+        submissions are left as single strings."""
+        bundle_list = []
+        next_bundle = []
+        prev_token = None
+
+        for i, submission in enumerate(submissions):
+            match = re.match(BATCH_SUBMISSION_REGEX, submission)
+
+            if match:
+                token = match.group(1)
+                # Ensure that batches are in separate lists
+                if prev_token and prev_token != token and next_bundle:
+                    bundle_list.append(next_bundle)
+                    next_bundle = []
+                next_bundle.append(submission)
+                prev_token = token
+            elif next_bundle:
+                # This isn't a match
+                bundle_list.append(next_bundle)
+                next_bundle = []
+
+            if i + 1 >= len(submissions) and next_bundle:
+                bundle_list.append(next_bundle)
+                next_bundle = []
+
+            if not match:
+                bundle_list.append(submission)
+
+        return bundle_list
 
     # Kept here for reference.
     """def process_submissions(self, directory: str, submissions: List[str]):
