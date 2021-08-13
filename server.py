@@ -866,8 +866,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None):
         audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
         if audio_doc is None or audio_doc["vtt"] is None:
             abort(HTTPStatus.NOT_FOUND)
-        response = make_response(audio_doc["vtt"])
-        response.headers["Content-Type"] = "text/plain; charset=utf-8"
+        response = make_response(bytes(audio_doc["vtt"], "utf-8"))
+        response.headers["Content-Type"] = "application/octet-stream"
         return response
 
     @app.route("/leaderboard", methods=["GET"])
