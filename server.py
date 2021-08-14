@@ -6,6 +6,8 @@ import os
 import pprint
 import queue
 import re
+import signal
+import time
 from copy import deepcopy
 from sys import exit
 from datetime import datetime, timedelta
@@ -39,6 +41,7 @@ PROD_ENV_NAME = "production"
 TEST_ENV_NAME = "testing"
 
 
+# TODO: Re-implement QuizzrWatcher through the Celery framework for Flask.
 def create_app(test_overrides: dict = None, test_inst_path: str = None, test_storage_root: str = None):
     """
     App factory function for the data flow server
@@ -48,6 +51,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     :param test_storage_root: The root directory to use in place of the "storage" directory
     :return: The data flow server as a Flask app
     """
+
+    app_attributes = {}
 
     instance_path = test_inst_path or os.environ.get("Q_INST_PATH")\
         or os.path.expanduser(os.path.join("~", "quizzr_server"))
@@ -103,10 +108,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             }
         },
         "USE_ID_TOKENS": True,
-        "MAX_LEADERBOARD_SIZE": 200,  # The maximum number of entries allowable on the leaderboard.
-        "DEFAULT_LEADERBOARD_SIZE": 10,  # The default number of entries on the leaderboard.
-        "QUEUE_GET_INTERVAL": 0.3,
-        "QUEUE_GET_MAX_BLOCK": 3600
+        "MAX_LEADERBOARD_SIZE": 200,
+        "DEFAULT_LEADERBOARD_SIZE": 10,
+        "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1
     }
 
     config_dir = os.path.join(app.instance_path, "config")
@@ -204,6 +208,21 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     # print("This is a test message 2")
     # app.logger.debug("Finished registering signal handler")
     app.logger.debug("Starting process...")
+
+    def restart_qw_process(signal_, frame):
+        app.logger.info("Restarting pre-screening program...")
+        if "qwStartTime" in app_attributes:
+            since_prev_restart = time.time() - app_attributes["qwStartTime"]
+            if since_prev_restart < app.config["QW_SHUTDOWN_INTERVAL_THRESHOLD"]:
+                # Might be better to make it use a backoff strategy.
+                app.logger.critical("Unable to start up pre-screening program. Forcing shutdown...")
+                exit(1)
+        app_attributes["qwStartTime"] = time.time()
+        qw_process.start()
+
+    if not app.config["DEBUG"]:
+        signal.signal(signal.SIGCHLD, restart_qw_process)
+    app_attributes["qwStartTime"] = time.time()
     qw_process.start()
     app.logger.info("Finished pre-screening program initialization")
     socket_server_key = {}
@@ -421,30 +440,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             pointers.append(pointer)
 
         return {"prescreenPointers": pointers}, HTTPStatus.ACCEPTED
-        # TODO: Handle files being processed in an arbitrary order
-        # app.logger.info("Awaiting result...")
-        # pre_screen_successful = True
-        # while submission_names:
-        #     _debug_variable("submission_names", submission_names)
-        #     result = prescreen_results_queue.get(True, app.config["QUEUE_GET_MAX_BLOCK"])  # Block for at most 1 hour for now.
-        #     app.logger.info("Received submission. Evaluating name...")
-        #     _debug_variable("queue.get()", result)
-        #     if result["name"] in submission_names:
-        #         app.logger.info("Name matches. Removing from list and evaluating if pre-screen is successful")
-        #         submission_names.remove(result["name"])
-        #         if result["case"] == "rejected":
-        #             app.logger.info("Submission was rejected. Continuing...")
-        #             pre_screen_successful = False
-        #         else:
-        #             app.logger.info("Submission was accepted. Continuing...")
-        #     else:
-        #         # TODO: REALLY consider not doing this in the future.
-        #         app.logger.info("Name does not match. Pushing back onto queue")
-        #         prescreen_results_queue.put(result)
-        #     time.sleep(app.config["QUEUE_GET_INTERVAL"])
-        #
-        # app.logger.info(f"Finished evaluating results. Final Result: {pre_screen_successful}")
-        # return {"prescreenSuccessful": pre_screen_successful}, HTTPStatus.ACCEPTED
 
         # try:
         #     results = qp.pick_submissions(
