@@ -220,8 +220,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app_attributes["qwStartTime"] = time.time()
         qw_process.start()
 
-    if not app.config["DEBUG"]:
-        signal.signal(signal.SIGCHLD, restart_qw_process)
+    # if not app.config["DEBUG"]:
+    #     signal.signal(signal.SIGCHLD, restart_qw_process)
     app_attributes["qwStartTime"] = time.time()
     qw_process.start()
     app.logger.info("Finished pre-screening program initialization")
