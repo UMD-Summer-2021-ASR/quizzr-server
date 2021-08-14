@@ -523,7 +523,7 @@ paths:
         '200':
           description: OK
           content:
-            application/json:
+            application/octet-stream:
               schema:
                 $ref: '#/components/schemas/VTT'
         '404':
