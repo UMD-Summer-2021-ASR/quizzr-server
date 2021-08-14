@@ -47,6 +47,9 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `LOG_PRIVATE_DATA` Redact sensitive information, such as Firebase ID tokens, in log messages.
 * `VISIBILITY_CONFIGS` A set of configurations that determine which collection to retrieve a profile from and what projection to apply. Projections are objects with the key being the field name and the value being 1 or 0, representing whether to include or exclude the field.
 * `USE_ID_TOKENS` A configuration option specifying whether to use a Firebase ID token or to use the raw contents for identifying the user. Has no effect when `TESTING` is False.
+* `MAX_LEADERBOARD_SIZE` The maximum number of entries allowable on the leaderboard.
+* `DEFAULT_LEADERBOARD_SIZE` The default number of entries on the leaderboard.
+* `QW_SHUTDOWN_INTERVAL_THRESHOLD` Shutdown the server if the interval between restarts of the pre-screening program goes below this value.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
@@ -85,7 +88,10 @@ The following JSON data shows the default values of each configuration field. Yo
       "collection": "Users"
     }
   },
-  "USE_ID_TOKENS": true
+  "USE_ID_TOKENS": true,
+  "MAX_LEADERBOARD_SIZE": 200,
+  "DEFAULT_LEADERBOARD_SIZE": 10,
+  "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1
 }
 ```
 
@@ -100,7 +106,8 @@ $ flask run
 You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 
-To run the server in debug mode, set `FLASK_ENV` to `development` in the terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.
+To run the server in debug mode, set `FLASK_ENV` to `development` in the terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.\
+Note: Due to limitations, the server will not restart the pre-screening subprocess if the debugger is enabled.
 
 ### Testing
 There is a separate repository for running automated tests on the server. See the [quizzr-server-test](https://github.com/UMD-Summer-2021-ASR/quizzr-server-test) repository for more information.

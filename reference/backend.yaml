@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.4.8
+  version: 0.5.0
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -221,10 +221,12 @@ paths:
               schema:
                 type: object
                 properties:
-                  prescreenSuccessful:
-                    type: boolean
+                  prescreenPointers:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Prescreen-Pointer'
                 required:
-                  - prescreenSuccessful
+                  - prescreenPointers
               examples: {}
           headers: {}
         '400':
@@ -1141,6 +1143,52 @@ paths:
           description: Unauthorized
       operationId: check_token
       description: 'Attempts to validate the Firebase ID token given in the Authorization header. Note: The same behavior occurs with `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `TRACE`.'
+  '/prescreen/{pointer}':
+    parameters:
+      - schema:
+          type: string
+        name: pointer
+        in: path
+        required: true
+        description: A short-lived pointer retrieved from /audio POST to get the status of a submission.
+    get:
+      summary: Get Submission Status
+      tags:
+        - frontend
+        - rec-pipeline
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - running
+                      - finished
+                      - err
+                  name:
+                    type: string
+                    description: The name of the audio file on-disk
+                  pointer:
+                    $ref: '#/components/schemas/Prescreen-Pointer'
+                  err:
+                    type: string
+                    description: 'A machine-readable error message, present if status is "err"'
+                  accepted:
+                    type: boolean
+                    description: 'Whether the submission passed the pre-screening, present if status is "finished"'
+                required:
+                  - status
+                  - name
+                  - pointer
+        '404':
+          $ref: '#/components/responses/Error'
+      operationId: get_prescreen_status
+      description: 'Use a pointer to get the status of the submission and whether it passed the pre-screening if it is finished, or get the error that occurred if there was one.'
 components:
   schemas:
     Audio-Id:
@@ -1201,6 +1249,10 @@ components:
         type: integer
       examples:
         - - 0
+    Prescreen-Pointer:
+      title: Prescreen-Pointer
+      type: string
+      description: A short-lived pointer to use for /prescreen to get the status of a submission.
     Public-Profile:
       title: Public-Profile
       type: object
@@ -1452,7 +1504,13 @@ components:
         format: uri
       description: The path to a Firebase Cloud Storage object in the format `<recType>/<_id>`
       allowReserved: true
-  responses: {}
+  responses:
+    Error:
+      description: A response for when any kind of handled error occurs. May not always be present
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error-Msg-JSON'
   securitySchemes:
     Firebase-Auth:
       type: http

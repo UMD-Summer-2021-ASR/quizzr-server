@@ -4,7 +4,7 @@ import os
 import random
 from copy import deepcopy
 from datetime import datetime
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Union
 from secrets import token_urlsafe
 
 import pymongo
@@ -26,20 +26,29 @@ class QuizzrTPM:
 
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name: str, app_config: dict, secret_dir: str, rec_dir: str, api: QuizzrAPISpec):
+    def __init__(self,
+                 database_name: str,
+                 config: dict, api: QuizzrAPISpec, firebase_app_specifier: Union[str, firebase_admin.App]):
+        """
+
+
+        :param database_name:
+        :param config:
+        :param api:
+        :param firebase_app_specifier: A string specifying the path to the service account key or a Firebase app
+        """
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
         self.logger = logging.getLogger(__name__)
-        self.app_config = app_config
+        self.config = config
 
-        self.SECRET_DATA_DIR = secret_dir
-        self.REC_DIR = rec_dir
         self.api = api
 
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
-        cred = credentials.Certificate(os.path.join(self.SECRET_DATA_DIR, "firebase_storage_key.json"))
-        firebase_admin.initialize_app(cred, {
-            "storageBucket": "quizzrio.appspot.com"
-        })
+        if type(firebase_app_specifier) is str:
+            cred = credentials.Certificate(firebase_app_specifier)
+            self.app = firebase_admin.initialize_app(cred, {
+                "storageBucket": "quizzrio.appspot.com"
+            })
 
         self.bucket = storage.bucket()
 
@@ -191,7 +200,7 @@ class QuizzrTPM:
         :param blob_path: The canonical blob name
         :return: An in-memory bytes buffer handler for the file
         """
-        blob_name = "/".join([self.app_config["BLOB_ROOT"], blob_path])
+        blob_name = "/".join([self.config["BLOB_ROOT"], blob_path])
         self.logger.debug(f"blob_name = {blob_name!r}")
         blob = self.bucket.blob(blob_name)
         file_bytes = blob.download_as_bytes()
@@ -212,7 +221,7 @@ class QuizzrTPM:
         :param excluded_fields: The fields to omit
         :return: The audio document with the best evaluation with the given projection applied.
         """
-        query = {"_id": {"$in": id_list}, "version": self.app_config["VERSION"]}
+        query = {"_id": {"$in": id_list}, "version": self.config["VERSION"]}
         if self.audio.count_documents(query) == 0:
             self.logger.error("No audio documents found")
             return
@@ -418,7 +427,7 @@ class QuizzrTPM:
         upload_count = 0
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
-            blob_name = token_urlsafe(self.app_config["BLOB_NAME_LENGTH"])
+            blob_name = token_urlsafe(self.config["BLOB_NAME_LENGTH"])
             blob_path = self.get_blob_path(blob_name, subdir)
             blob = self.bucket.blob(blob_path)
             blob.upload_from_filename(file_path)
@@ -435,7 +444,7 @@ class QuizzrTPM:
         :param subdir: The directory/ies to put the file in
         :return: A blob "path"
         """
-        return "/".join([self.app_config["BLOB_ROOT"], subdir, blob_name])
+        return "/".join([self.config["BLOB_ROOT"], subdir, blob_name])
 
     def upload_one(self, file_path: str, subdir: str) -> str:
         """
@@ -472,7 +481,7 @@ class QuizzrTPM:
         for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
-                "version": self.app_config["VERSION"]
+                "version": self.config["VERSION"]
             }
             metadata = sub2meta[submission]
             for k, v in metadata.items():
@@ -550,7 +559,7 @@ class QuizzrTPM:
         :param visibility: How much of the profile to show. Valid values are "basic", "public", and "private"
         :return: A document from the MongoDB Users collection
         """
-        visibility_configs = self.app_config["VISIBILITY_CONFIGS"]
+        visibility_configs = self.config["VISIBILITY_CONFIGS"]
         config = visibility_configs[visibility]
         return self.database.get_collection(config["collection"]).find_one(user_id, config["projection"])
 
