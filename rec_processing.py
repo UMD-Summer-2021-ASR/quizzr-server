@@ -1,4 +1,6 @@
 import atexit
+from queue import Full
+from contextlib import closing
 import logging
 import multiprocessing
 import os
@@ -8,6 +10,7 @@ import signal
 
 import sys
 import time
+import wave
 from typing import List, Dict, Union
 
 import bson.json_util
@@ -18,7 +21,7 @@ import vtt_conversion
 from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
 
-logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
+# logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
 
 BATCH_SUBMISSION_REGEX = re.compile(r"(.+)b\d$")
 PUNC_REGEX = re.compile(r"[.?!,;:\"\-]")
@@ -26,13 +29,19 @@ WHITESPACE_REGEX = re.compile(r"\s+")
 
 
 class QuizzrWatcher:
-    def __init__(self, watch_dir: str, func, queue, interval: float = 2, poll_size_limit: int = 32):
+    def __init__(self, watch_dir: str, error_dir: str, func, queue, interval: float = 2, poll_size_limit: int = 32,
+                 submission_file_types: list = None):
         self.done = False
         self.queue = queue
         self.watch_dir = watch_dir
+        self.error_dir = error_dir
         self.poll_size_limit = poll_size_limit
         self.func = func
         self.interval = interval
+        self.submission_file_types = submission_file_types or ["wav", "json"]
+        self.logger = logging.getLogger(__name__)
+        os.makedirs(self.watch_dir, exist_ok=True)
+        os.makedirs(self.error_dir, exist_ok=True)
         atexit.register(self.exit_handler)
         # signal.signal(signal.SIGINT, self.signal_handler)
 
@@ -46,9 +55,28 @@ class QuizzrWatcher:
         while not self.done:
             queued_submissions = self.queue_submissions(self.watch_dir, self.poll_size_limit)
             if queued_submissions:
-                results = self.func(queued_submissions)
-                for item in results:
-                    self.queue.put(item)
+                try:
+                    results = self.func(queued_submissions)
+                except Exception as e:
+                    self.logger.exception("Encountered an error during pre-screening")
+                    for t in self.submission_file_types:
+                        for sub_name in queued_submissions:
+                            sub_path = ".".join([os.path.join(self.watch_dir, sub_name), t])
+                            error_path = ".".join([os.path.join(self.error_dir, sub_name), t])
+                            if os.path.exists(sub_path):
+                                # FIXME: Will raise FileExistsError on Windows
+                                os.rename(sub_path, error_path)
+                    try:
+                        self.queue.put((queued_submissions, e))
+                    except Full:
+                        self.logger.error("Could not push error to queue")
+                else:
+                    for item in results:
+                        try:
+                            self.queue.put(item)
+                        except Full:
+                            self.logger.error("Queue is full. Aborting")
+                            break
             try:
                 time.sleep(self.interval)
             except KeyboardInterrupt:
@@ -201,6 +229,7 @@ class QuizzrProcessor:
                                 "metadata": sub2meta[batch_item],
                                 "accuracy": result["accuracy"]
                             }
+                            final_results[batch_item]["metadata"]["duration"] = self.get_duration(batch_item)
                 else:
                     if "err" in result:
                         final_results[submission] = {"case": "err", "err": result["err"]}
@@ -219,6 +248,7 @@ class QuizzrProcessor:
                             "metadata": sub2meta[submission],
                             "accuracy": result["accuracy"]
                         }
+                        final_results[submission]["metadata"]["duration"] = self.get_duration(submission)
                         num_accepted_submissions += 1
             self.logger.debug(f"final_results = {pprint.pformat(final_results)}")
 
@@ -231,6 +261,7 @@ class QuizzrProcessor:
                     "case": "accepted",
                     "metadata": sub2meta[submission]
                 }
+                final_results[submission]["metadata"]["duration"] = self.get_duration(submission)
             self.logger.info(f"Received {len(typed_submissions['buzz'])} submission(s) for buzz-ins")
 
         if "answer" in typed_submissions:
@@ -239,6 +270,7 @@ class QuizzrProcessor:
                     "case": "accepted",
                     "metadata": sub2meta[submission]
                 }
+                final_results[submission]["metadata"]["duration"] = self.get_duration(submission)
             self.logger.info(f"Received {len(typed_submissions['answer'])} submission(s) for an answer to a question")
         return final_results
 
@@ -443,6 +475,10 @@ class QuizzrProcessor:
                     results.append((submission, {"err": "metadata_not_found"}))
                     continue
                 result = self.preprocess_one_submission(submission, sub2meta[submission])
+                if "err" in result:
+                    self.logger.error(f"Error encountered with submission '{submission}'. Skipping")
+                    results.append((submission, result))
+                    continue
                 accuracy = result["accuracyFraction"][0] / result["accuracyFraction"][1]
                 results.append((submission, {"accuracy": accuracy, "vtt": result["vtt"]}))
 
@@ -557,6 +593,12 @@ class QuizzrProcessor:
             with open(submission_path + ".json", "r") as meta_f:
                 sub2meta[submission] = bson.json_util.loads(meta_f.read())
         return sub2meta
+
+    def get_duration(self, submission: str) -> float:
+        submission_path = os.path.join(self.DIRECTORY, submission) + ".wav"
+        with closing(wave.open(submission_path, "r")) as f:
+            duration = f.getnframes() / f.getframerate()
+        return duration
 
     @staticmethod
     def categorize_submissions(submissions: List[str], sub2meta: Dict[str, dict]):
@@ -690,7 +732,7 @@ def delete_submission(directory: str, submission_name: str, file_types: List[str
             os.remove(file_path)
 
 
-def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, proc_config, queue, submission_file_types=None):
+def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, error_dir, proc_config, queue, submission_file_types=None):
     # logger.info("Initializing pre-screening program...")
     # logger.debug("Instantiating QuizzrProcessorHead...")
     qtpm = QuizzrTPM(db_name, tpm_config, api, firebase_app_specifier)
@@ -702,7 +744,7 @@ def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, que
     )
     # logger.debug("Finished instantiating QuizzrProcessorHead")
     # logger.debug("Instantiating QuizzrWatcher...")
-    qw = QuizzrWatcher(queue_dir, qph.execute, queue)
+    qw = QuizzrWatcher(queue_dir, error_dir, qph.execute, queue)
     # logger.debug("Finished instantiating QuizzrWatcher")
     # logger.debug("Starting process...")
     qw.execute()
@@ -724,7 +766,7 @@ def main():
             "minAccuracy": 0.5,
             "queueLimit": 32
         }, ["wav", "json", "vtt"])
-    qw = QuizzrWatcher(rec_dir, qph.execute, multiprocessing.Queue())
+    qw = QuizzrWatcher(rec_dir, rec_dir, qph.execute, multiprocessing.Queue())
     qw.execute()
 
 

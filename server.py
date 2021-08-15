@@ -67,6 +67,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         os.makedirs(log_dir)
     log_path = os.path.join(log_dir, "sv_log.log")
     handler = logging.handlers.TimedRotatingFileHandler(log_path, when='midnight', backupCount=7)
+    formatter = logging.Formatter("[%(asctime)s] %(levelname)s - %(name)s: %(message)s")
+    handler.setFormatter(formatter)
     app.logger.addHandler(handler)
     app.logger.info(f"Instantiated server with instance path '{instance_path}'")
     CORS(app)
@@ -103,7 +105,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 "collection": "Users"
             },
             "private": {
-                "projection": {"_id": 0},
+                "projection": None,
                 "collection": "Users"
             }
         },
@@ -116,13 +118,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     config_dir = os.path.join(app.instance_path, "config")
     if not os.path.exists(config_dir):
         os.mkdir(config_dir)
-    conf_path = os.path.join(config_dir, "sv_config.json")
+    conf_name = os.environ.get("Q_CONFIG_NAME") or "sv_config.json"
+    app.logger.info(f"Using config with name '{conf_name}'")
+    conf_path = os.path.join(config_dir, conf_name)
 
     app_conf = default_config
     if os.path.exists(conf_path):
         with open(conf_path, "r") as config_f:
             config = json.load(config_f)
         app_conf.update(config)
+    else:
+        app.logger.warning(f"Config at path '{conf_path}' not found")
 
     for var in app_conf:
         if type(app_conf[var]) is not str and var in os.environ:
@@ -137,6 +143,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         os.makedirs(rec_dir)
 
     queue_dir = os.path.join(rec_dir, "queue")
+    error_dir = os.path.join(rec_dir, "_error")
 
     secret_dir = os.path.join(app.instance_path, "secrets")
     if not os.path.exists(secret_dir):
@@ -148,6 +155,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app.config.from_mapping(app_conf)
     if app.config["DEFAULT_LEADERBOARD_SIZE"] > app.config["MAX_LEADERBOARD_SIZE"]:
         app.logger.critical("Configured default leaderboard size must not exceed maximum leaderboard size.")
+        exit(1)
     app.logger.info("Finished configuring server instance")
 
     app.logger.info("Initializing third-party services...")
@@ -179,6 +187,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "api": api,
         "rec_dir": rec_dir,
         "queue_dir": queue_dir,
+        "error_dir": error_dir,
         "proc_config": app_conf["PROC_CONFIG"],
         "submission_file_types": app_conf["SUBMISSION_FILE_TYPES"],
         "queue": prescreen_results_queue
@@ -210,6 +219,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app.logger.debug("Starting process...")
 
     def restart_qw_process(signal_, frame):
+        app.logger.info("Received SIGCHLD")
+        app.logger.debug(f"app_attributes = {app_attributes}")
+        pid, stat = os.waitpid(0, 0)
+        if "qwPid" not in app_attributes or pid != app_attributes["qwPid"]:
+            app.logger.info("pid does not match or qwPid not set. Ignoring")
+            return
+        app.logger.debug(f"stat = {stat}")
         app.logger.info("Restarting pre-screening program...")
         if "qwStartTime" in app_attributes:
             since_prev_restart = time.time() - app_attributes["qwStartTime"]
@@ -219,11 +235,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 exit(1)
         app_attributes["qwStartTime"] = time.time()
         qw_process.start()
+        app_attributes["qwPid"] = qw_process.pid
+        app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
 
     # if not app.config["DEBUG"]:
-    #     signal.signal(signal.SIGCHLD, restart_qw_process)
+    #     old_sigh = signal.signal(signal.SIGCHLD, restart_qw_process)
+    #     app.logger.debug(f"old_sigh = {old_sigh}")
     app_attributes["qwStartTime"] = time.time()
     qw_process.start()
+    app_attributes["qwPid"] = qw_process.pid
+    app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
     app.logger.info("Finished pre-screening program initialization")
     socket_server_key = {}
     prescreen_statuses = []
@@ -1411,14 +1432,22 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             except queue.Empty:
                 break
             else:
-                ps_doc = _get_ps_doc(name=result["name"])
-                _debug_variable("ps_doc", ps_doc)
-                if result["case"] == "err":
-                    ps_doc["status"] = "err"
-                    ps_doc["err"] = result["err"]
+                if type(result) is tuple and isinstance(result[1], Exception):
+                    for submission in result[0]:
+                        ps_doc = _get_ps_doc(name=submission)
+                        _debug_variable("ps_doc", ps_doc)
+                        ps_doc["status"] = "err"
+                        ps_doc["err"] = "internal_error"
+                        # ps_doc["extra"] = repr(result[1])
                 else:
-                    ps_doc["status"] = "finished"
-                    ps_doc["accepted"] = result["case"] == "accepted"
+                    ps_doc = _get_ps_doc(name=result["name"])
+                    _debug_variable("ps_doc", ps_doc)
+                    if result["case"] == "err":
+                        ps_doc["status"] = "err"
+                        ps_doc["err"] = result["err"]
+                    else:
+                        ps_doc["status"] = "finished"
+                        ps_doc["accepted"] = result["case"] == "accepted"
         # Remove expired pointers.
         now = datetime.now()
         # A for loop won't delete documents properly.
