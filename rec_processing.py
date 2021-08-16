@@ -1,4 +1,3 @@
-import atexit
 from queue import Full
 from contextlib import closing
 import logging
@@ -6,7 +5,6 @@ import multiprocessing
 import os
 import pprint
 import re
-import signal
 
 import sys
 import time
@@ -29,8 +27,10 @@ WHITESPACE_REGEX = re.compile(r"\s+")
 
 
 class QuizzrWatcher:
+    """A class for polling a queue directory and running a function when files are found"""
     def __init__(self, watch_dir: str, error_dir: str, func, queue, interval: float = 2, poll_size_limit: int = 32,
-                 submission_file_types: list = None):
+                 submission_file_types: list = None, logger=None):
+        """Create an instance of this class in preparation for execution and make the required directories."""
         self.done = False
         self.queue = queue
         self.watch_dir = watch_dir
@@ -39,19 +39,20 @@ class QuizzrWatcher:
         self.func = func
         self.interval = interval
         self.submission_file_types = submission_file_types or ["wav", "json"]
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger or logging.getLogger(__name__)
         os.makedirs(self.watch_dir, exist_ok=True)
         os.makedirs(self.error_dir, exist_ok=True)
-        atexit.register(self.exit_handler)
+        # atexit.register(self.exit_handler)
         # signal.signal(signal.SIGINT, self.signal_handler)
 
-    def exit_handler(self):
-        print('Exit handler executed!')
+    # def exit_handler(self):
+    #     print('Exit handler executed!')
 
     # def signal_handler(self, signal, frame):
     #     self.done = True
 
     def execute(self):
+        """Start running the main loop of the process."""
         while not self.done:
             queued_submissions = self.queue_submissions(self.watch_dir, self.poll_size_limit)
             if queued_submissions:
@@ -87,7 +88,7 @@ class QuizzrWatcher:
     @staticmethod
     def queue_submissions(directory: str, size_limit: int = None):
         """
-        Get up to <size_limit> submission names
+        Get up to <size_limit> submission names.
 
         :param directory: The directory to get the submission names from
         :param size_limit: The maximum number of submission names allowable
@@ -104,7 +105,10 @@ class QuizzrWatcher:
 
 
 class QuizzrProcessorHead:
-    def __init__(self, qtpm: QuizzrTPM, directory: str, config: dict, submission_file_types: List[str] = None):
+    """A class for pre-screening and uploading submissions"""
+    def __init__(self, qtpm: QuizzrTPM, directory: str, config: dict, submission_file_types: List[str] = None,
+                 logger=None):
+        """Instantiate the class for use. Requires <directory>/queue to be present"""
         self.qtpm = qtpm
         if submission_file_types is None:
             self.submission_file_types = ["wav", "json"]
@@ -112,12 +116,16 @@ class QuizzrProcessorHead:
             self.submission_file_types = submission_file_types
         self.directory = directory  # May be used for the Montreal Forced Aligner
         self.rec_directory = os.path.join(self.directory, "queue")
-        self.qp = QuizzrProcessor(qtpm.database, self.rec_directory, config, submission_file_types)
-        if not os.path.exists(self.rec_directory):
-            os.makedirs(self.rec_directory)
-        self.logger = logging.getLogger(__name__)
+        # if not os.path.exists(self.rec_directory):
+        #     os.makedirs(self.rec_directory)
+        self.logger = logger or logging.getLogger(__name__)
+        self.qp = QuizzrProcessor(qtpm.database, self.rec_directory, config, submission_file_types, self.logger)
 
     def execute(self, submissions: List[str]):
+        """Pre-screen and delete the given submissions, uploading submissions that passed the pre-screening to the
+        cloud.
+
+        Precondition: WAV and JSON files exist in <self.directory>/queue for each submission name provided."""
         results = self.qp.pick_submissions(submissions)
 
         # Split by recType
@@ -158,23 +166,27 @@ class QuizzrProcessorHead:
             sub2vtt=sub2vtt
         )
 
+        # Get summary and remove submissions
         summary = []
 
         for submission in results:
-            self.logger.info(f"Removing submission with name '{submission}'")
-            delete_submission(self.rec_directory, submission, self.submission_file_types)
             end_result = {"name": submission, "case": results[submission]["case"]}
             if end_result["case"] == "err":
                 end_result["err"] = results[submission]["err"]
             summary.append(end_result)
+            self.logger.info(f"Removing submission with name '{submission}'")
+            delete_submission(self.rec_directory, submission, self.submission_file_types)
 
         return summary
 
 
 class QuizzrProcessor:
-    def __init__(self, database: Database, directory: str, config: dict, submission_file_types: List[str]):
-        self.logger = logging.getLogger(__name__)
-        self.submission_file_types = submission_file_types
+    """A class for pre-screening submissions"""
+    def __init__(self, database: Database, directory: str, config: dict, submission_file_types: List[str] = None,
+                 logger=None):
+        """Instantiate the class for use. Requires a connection to MongoDB."""
+        self.logger = logger or logging.getLogger(__name__)
+        self.submission_file_types = submission_file_types or ["wav", "json"]
         self.config = config
         self.DIRECTORY = directory
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
@@ -489,6 +501,8 @@ class QuizzrProcessor:
         return results
 
     def preprocess_one_submission(self, submission: str, metadata: dict):
+        """Pre-screen a single submission with the given metadata and return the accuracy fraction and VTT in a
+        dictionary."""
         file_path = os.path.join(self.DIRECTORY, submission)
         wav_file_path = file_path + ".wav"
         qid = metadata.get("qb_id")
@@ -732,21 +746,18 @@ def delete_submission(directory: str, submission_name: str, file_types: List[str
             os.remove(file_path)
 
 
-def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, error_dir, proc_config, queue, submission_file_types=None):
-    # logger.info("Initializing pre-screening program...")
-    # logger.debug("Instantiating QuizzrProcessorHead...")
-    qtpm = QuizzrTPM(db_name, tpm_config, api, firebase_app_specifier)
-    qph = QuizzrProcessorHead(
-        qtpm,
-        rec_dir,
-        proc_config,
-        submission_file_types
-    )
-    # logger.debug("Finished instantiating QuizzrProcessorHead")
-    # logger.debug("Instantiating QuizzrWatcher...")
-    qw = QuizzrWatcher(queue_dir, error_dir, qph.execute, queue)
-    # logger.debug("Finished instantiating QuizzrWatcher")
-    # logger.debug("Starting process...")
+def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, error_dir, proc_config, queue,
+                  submission_file_types=None, logger=None):
+    logger = logger or logging.getLogger(__name__)
+    logger.info("Initializing...")
+    logger.debug("Instantiating QuizzrProcessorHead...")
+    qtpm = QuizzrTPM(db_name, tpm_config, api, firebase_app_specifier, logger.getChild("qtpm"))
+    qph = QuizzrProcessorHead(qtpm, rec_dir, proc_config, submission_file_types, logger.getChild("qp"))
+    logger.debug("Finished instantiating QuizzrProcessorHead")
+    logger.debug("Instantiating QuizzrWatcher...")
+    qw = QuizzrWatcher(queue_dir, error_dir, qph.execute, queue, logger=logger)
+    logger.debug("Finished instantiating QuizzrWatcher")
+    logger.debug("Finished initialization. Entering main loop")
     qw.execute()
 
 

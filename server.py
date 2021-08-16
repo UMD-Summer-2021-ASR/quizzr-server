@@ -6,7 +6,7 @@ import os
 import pprint
 import queue
 import re
-import signal
+import string
 import time
 from copy import deepcopy
 from sys import exit
@@ -112,7 +112,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "USE_ID_TOKENS": True,
         "MAX_LEADERBOARD_SIZE": 200,
         "DEFAULT_LEADERBOARD_SIZE": 10,
-        "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1
+        "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1,
+        "MAX_USERNAME_LENGTH": 16,
+        "USERNAME_CHAR_SET": string.ascii_letters + string.digits
     }
 
     config_dir = os.path.join(app.instance_path, "config")
@@ -130,11 +132,21 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     else:
         app.logger.warning(f"Config at path '{conf_path}' not found")
 
-    for var in app_conf:
-        if type(app_conf[var]) is not str and var in os.environ:
-            app.logger.critical(f"Cannot override non-string config field '{var}' through environment variable")
-            exit(1)
-    app_conf.update(os.environ)
+    # env_cfg = {}
+    #
+    # for key in app_conf:
+    #     # if type(app_conf[var]) is not str and var in os.environ:
+    #     #     app.logger.critical(f"Cannot override non-string config field '{var}' through environment variable")
+    #     #     exit(1)
+    #     env_key = "DF_CFG_" + key
+    #     if env_key in os.environ:
+    #         env_cfg_val = os.environ.get(env_key)
+    #         if env_cfg_val:
+    #             try:
+    #                 env_cfg[key] = json.loads(env_cfg_val)
+    #             except json.decoder.JSONDecodeError:
+    #                 env_cfg[key] = env_cfg_val
+    # app_conf.update(env_cfg)
     if test_overrides:
         app_conf.update(test_overrides)
 
@@ -162,10 +174,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app.logger.info(f"MongoDB Database Name = '{app_conf['DATABASE']}'")
     app.logger.info(f"Firebase Blob Root = '{app_conf['BLOB_ROOT']}'")
     app.logger.info(f"Environment set to '{app_conf['Q_ENV']}'")
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, api, os.path.join(secret_dir, "firebase_storage_key.json"))
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, api, os.path.join(secret_dir, "firebase_storage_key.json"),
+                     app.logger.getChild("qtpm"))
     app.logger.info("Initialized third-party services")
 
-    app.logger.info("Initializing pre-screening program...")
+    # app.logger.info("Initializing pre-screening program...")
     # app.logger.debug("Instantiating QuizzrProcessorHead...")
     # qph = rec_processing.QuizzrProcessorHead(
     #     qtpm,
@@ -190,7 +203,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "error_dir": error_dir,
         "proc_config": app_conf["PROC_CONFIG"],
         "submission_file_types": app_conf["SUBMISSION_FILE_TYPES"],
-        "queue": prescreen_results_queue
+        "queue": prescreen_results_queue,
+        "logger": app.logger.getChild("prescreen")
     })
     qw_process.daemon = True
     app.logger.debug("Finished instantiating process")
@@ -245,12 +259,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     qw_process.start()
     app_attributes["qwPid"] = qw_process.pid
     app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
-    app.logger.info("Finished pre-screening program initialization")
+    app.logger.info("Started pre-screening program")
     socket_server_key = {}
     prescreen_statuses = []
 
     pprinter = pprint.PrettyPrinter()
-    # TODO: multiprocessing
+
+    app.logger.info("Completed initialization")
 
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
     def audio_resource():
@@ -287,8 +302,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                     and (not qb_ids or len(recordings) == len(qb_ids))
                     and (not sentence_ids or len(recordings) == len(sentence_ids))
                     and (not diarization_metadata_list or len(recordings) == len(diarization_metadata_list))):
-                app.logger.error("Received incomplete form batch. Aborting")
-                return "incomplete_batch", HTTPStatus.BAD_REQUEST
+                # app.logger.error("Received incomplete form batch. Aborting")
+                # return "incomplete_batch", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    "Received incomplete form batch",
+                    "incomplete_batch",
+                    HTTPStatus.BAD_REQUEST,
+                    log_msg=True
+                )
 
             # for i in range(len(recordings)):
             #     recording = recordings[i]
@@ -346,13 +367,23 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         if audio_doc_count == 0:
             app.logger.error("Could not find any audio documents")
-            return "empty_unproc_audio", HTTPStatus.NOT_FOUND
+            # return "empty_unproc_audio", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "Could not find any audio documents",
+                "empty_unproc_audio",
+                HTTPStatus.NOT_FOUND
+            )
 
         _debug_variable("id2entries", id2entries)
         app.logger.info(f"Found {audio_doc_count} unprocessed audio document(s)")
         if not qids:
             app.logger.error("No audio documents contain question IDs")
-            return "empty_qid2entries", HTTPStatus.NOT_FOUND
+            # return "empty_qid2entries", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "No audio documents contain question IDs",
+                "empty_qid2entries",
+                HTTPStatus.NOT_FOUND
+            )
 
         question_gen = qtpm.find_questions(qids)
         for question in question_gen:
@@ -414,20 +445,48 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             _debug_variable("rec_type", rec_type)
 
             if not recording:
-                app.logger.error("No audio recording defined. Aborting")
-                return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
+                # app.logger.error("No audio recording defined. Aborting")
+                # return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    "Argument 'audio' is undefined",
+                    "undefined_arg",
+                    HTTPStatus.BAD_REQUEST,
+                    ["audio"],
+                    True
+                )
 
             if not rec_type:
-                app.logger.error("Form argument 'recType' is undefined. Aborting")
-                return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
+                # app.logger.error("Form argument 'recType' is undefined. Aborting")
+                # return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    "Argument 'recType' is undefined",
+                    "undefined_arg",
+                    HTTPStatus.BAD_REQUEST,
+                    ["recType"],
+                    True
+                )
             elif rec_type not in valid_rec_types:
-                app.logger.error(f"Invalid rec type '{rec_type!r}'. Aborting")
-                return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
+                # app.logger.error(f"Invalid rec type '{rec_type!r}'. Aborting")
+                # return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    f"Invalid rec type: '{rec_type!r}'",
+                    "invalid_arg",
+                    HTTPStatus.BAD_REQUEST,
+                    ["invalid_recType"],
+                    True
+                )
 
             qid_required = rec_type != "buzz"
             if qid_required and not qb_id:
-                app.logger.error("Form argument 'qid' expected. Aborting")
-                return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+                # app.logger.error("Form argument 'qid' expected. Aborting")
+                # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    "Form argument 'qb_id' expected",
+                    "undefined_arg",
+                    HTTPStatus.BAD_REQUEST,
+                    ["qb_id"],
+                    True
+                )
 
             _debug_variable("user_id", user_id)
 
@@ -535,7 +594,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         Additionally, update the recording history of the associated questions and users."""
         arguments_list = arguments_batch.get("arguments")
         if arguments_list is None:
-            return "undefined_arguments", HTTPStatus.BAD_REQUEST
+            # return "undefined_arguments", HTTPStatus.BAD_REQUEST
+            return _make_err_response(
+                "Argument 'arguments' is undefined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["arguments"],
+                True
+            )
         app.logger.info(f"Updating data related to {len(arguments_list)} audio documents...")
         errors = []
         success_count = 0
@@ -560,16 +626,42 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         user_answer = request.args.get("a")
 
         if not qid:
-            return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+            # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+            return _make_err_response(
+                "Query parameter 'qid' is undefined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["qid"],
+                True
+            )
         if not user_answer:
-            return "arg_a_undefined", HTTPStatus.BAD_REQUEST
+            # return "arg_a_undefined", HTTPStatus.BAD_REQUEST
+            return _make_err_response(
+                "Query parameter 'a' is undefined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["a"],
+                True
+            )
 
         question = qtpm.rec_questions.find_one({"qb_id": int(qid)})
         if not question:
-            return "question_not_found", HTTPStatus.NOT_FOUND
+            # return "question_not_found", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "Could not find question",
+                "question_not_found",
+                HTTPStatus.NOT_FOUND,
+                log_msg=True
+            )
         correct_answer = question.get("answer")
         if not correct_answer:
-            return "answer_not_found", HTTPStatus.NOT_FOUND
+            # return "answer_not_found", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "Question does not contain field 'answer'",
+                "answer_not_found",
+                HTTPStatus.NOT_FOUND,
+                log_msg=True
+            )
 
         answer_similarity = fuzz.token_set_ratio(user_answer, correct_answer)
         _debug_variable("answer_similarity", answer_similarity)
@@ -586,8 +678,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
         if socket_server_key:
-            app.logger.error("Secret key for socket server already exists. Aborting")
-            return "secret_key_exists", HTTPStatus.UNAUTHORIZED
+            # app.logger.error("Secret key for socket server already exists. Aborting")
+            # return "secret_key_exists", HTTPStatus.UNAUTHORIZED
+            return _make_err_response(
+                "Secret key for socket server already exists",
+                "secret_key_exists",
+                HTTPStatus.UNAUTHORIZED,
+                log_msg=True
+            )
         app.logger.info("Generating secret key for socket server...")
         key = token_urlsafe(256)
         socket_server_key["value"] = key
@@ -616,10 +714,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             "Arguments 'category' or 'categories' not provided",
             "undefined_args",
             HTTPStatus.BAD_REQUEST,
-            ["category_or_categories"]
+            ["category_or_categories"],
+            True
         )
 
     def handle_game_results_category(session_results):
+        """
+        Update the database with the results of a game session with only one category.
+
+        :param session_results:
+        :return:
+        """
         mode = session_results["mode"]
         category = session_results["category"]
         user_results = session_results["users"]
@@ -790,6 +895,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return {"successful": results.matched_count, "requested": len(session_results["users"])}
 
     def handle_game_results_categories(session_results):
+        """
+        Update the database with the results of a game session with multiple categories.
+
+        :param session_results:
+        :return:
+        """
         mode = session_results["mode"]
         categories = session_results["categories"]
         user_results = session_results["users"]
@@ -974,6 +1085,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/hls/vtt/<audio_id>", methods=["GET"])
     def get_vtt(audio_id):
+        """
+        Download the VTT of an audio document.
+
+        :param audio_id: The ID of the document in the Audio collection
+        :return: A response containing the VTT as an octet stream
+        """
         audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
         if audio_doc is None or audio_doc["vtt"] is None:
             abort(HTTPStatus.NOT_FOUND)
@@ -983,6 +1100,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/leaderboard", methods=["GET"])
     def get_leaderboard():
+        """Get the basic profiles of the top `size` players."""
         category = request.args.get("category") or "all"
         arg_size = request.args.get("size")
         size = arg_size or app.config["DEFAULT_LEADERBOARD_SIZE"]
@@ -991,7 +1109,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 f"Given size exceeds allowable limit ({app.config['MAX_LEADERBOARD_SIZE']})",
                 "invalid_arg",
                 HTTPStatus.BAD_REQUEST,
-                ["exceeds_value", app.config["MAX_LEADERBOARD_SIZE"]]
+                ["exceeds_value", app.config["MAX_LEADERBOARD_SIZE"]],
+                True
             )
         visibility_config = app.config["VISIBILITY_CONFIGS"]["basic"]
         cursor = qtpm.database.get_collection(visibility_config["collection"]).find(
@@ -1004,10 +1123,22 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/prescreen/<pointer>", methods=["GET"])
     def get_prescreen_status(pointer):
+        """
+        Get the status of a submission using a short-lived pointer.
+
+        :param pointer: A pointer retrieved from pre_screen
+        :return: A document containing the name, status, and other information of a submission
+        """
         status_doc = _get_ps_doc(pointer=pointer)
         if status_doc is None:
-            return _make_err_response("No such resource", "resource_not_found", HTTPStatus.NOT_FOUND)
+            app.logger.error(f"No such resource for pointer '{pointer}'. Aborting")
+            return _make_err_response(
+                "No such resource",
+                "resource_not_found",
+                HTTPStatus.NOT_FOUND
+            )
         if datetime.now() > status_doc["expiry"]:
+            app.logger.error(f"Resource for pointer '{pointer}' has expired. Aborting")
             return _make_err_response(
                 "The resource to access the status of this submission has expired.",
                 "expired_resource",
@@ -1032,24 +1163,67 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             return result
         elif request.method == "POST":
             args = request.get_json()
-            path, op = api.path_for("create_profile")
-            schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
-            err = _validate_args(args, schema)
-            if err:
-                return err
+            # path, op = api.path_for("create_profile")
+            # schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
+            # err = _validate_args(args, schema)
+            # if err:
+            #     return err
+            _debug_variable("args", args)
+            if len(args["username"]) == 0:
+                return _make_err_response(
+                    "Username is empty",
+                    "invalid_args",
+                    HTTPStatus.BAD_REQUEST,
+                    ["username", "empty"],
+                    True
+                )
+            if len(args["username"]) > app.config["MAX_USERNAME_LENGTH"]:
+                return _make_err_response(
+                    f"Username exceeds maximum length: {app.config['MAX_USERNAME_LENGTH']}",
+                    "invalid_args",
+                    HTTPStatus.BAD_REQUEST,
+                    ["username", "exceeds_max_length"],
+                    True
+                )
+
+            char_set = app.config["USERNAME_CHAR_SET"]
+            for char in args["username"]:
+                if char not in char_set:
+                    return _make_err_response(
+                        f"Username contains characters outside char set: {char_set}",
+                        "invalid_args",
+                        HTTPStatus.BAD_REQUEST,
+                        ["username", "outside_char_set", "alphanumeric"],
+                        True
+                    )
+
             try:
                 result = qtpm.create_profile(user_id, args["pfp"], args["username"])
             except pymongo.errors.DuplicateKeyError:
-                app.logger.error("User already registered. Aborting")
-                return "already_registered", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    "User already registered",
+                    "already_registered",
+                    HTTPStatus.BAD_REQUEST,
+                    log_msg=True
+                )
             except UsernameTakenError as e:
-                app.logger.error(f"User already exists: {e}. Aborting")
-                return f"user_exists: {e}", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    f"Username already exists: {e}",
+                    "username_exists",
+                    HTTPStatus.BAD_REQUEST,
+                    [str(e)],
+                    True
+                )
             if result:
                 app.logger.info("User successfully created")
-                return "user_created", HTTPStatus.CREATED
+                # return {"msg": "user_created"}, HTTPStatus.CREATED
+                return '', HTTPStatus.CREATED
             app.logger.error("Encountered an unknown error")
-            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+            return _make_err_response(
+                "Encountered an unknown error",
+                "unknown_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR
+            )
         elif request.method == "PATCH":
             path, op = api.path_for("modify_profile")
             update_args = request.get_json()
@@ -1066,14 +1240,26 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
             if result:
                 app.logger.info("User profile successfully modified")
-                return "user_modified", HTTPStatus.OK
-            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+                # return {"msg": "user_modified"}, HTTPStatus.OK
+                return '', HTTPStatus.OK
+            app.logger.error("Encountered an unknown error")
+            return _make_err_response(
+                "Encountered an unknown error",
+                "unknown_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR
+            )
         elif request.method == "DELETE":
             result = qtpm.delete_profile(user_id)
             if result:
                 app.logger.info("User profile successfully deleted")
-                return "user_deleted", HTTPStatus.OK
-            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+                # return {"msg": "user_deleted"}, HTTPStatus.OK
+                return '', HTTPStatus.OK
+            app.logger.error("Encountered an unknown error")
+            return _make_err_response(
+                "Encountered an unknown error",
+                "unknown_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR
+            )
 
     @app.route("/profile/<username>", methods=["GET", "PATCH", "DELETE"])
     def other_profile(username):
@@ -1091,14 +1277,26 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             result = qtpm.modify_profile(other_user_id, update_args)
             if result:
                 app.logger.info("User profile successfully modified")
-                return "other_user_modified", HTTPStatus.OK
-            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+                # return "other_user_modified", HTTPStatus.OK
+                return '', HTTPStatus.OK
+            app.logger.error("Encountered an unknown error")
+            return _make_err_response(
+                "Encountered an unknown error",
+                "unknown_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR
+            )
         elif request.method == "DELETE":
             result = qtpm.delete_profile(other_user_id)
             if result:
                 app.logger.info("User profile successfully deleted")
-                return "other_user_deleted", HTTPStatus.OK
-            return "unknown_error", HTTPStatus.INTERNAL_SERVER_ERROR
+                # return "other_user_deleted", HTTPStatus.OK
+                return '', HTTPStatus.OK
+            app.logger.error("Encountered an unknown error")
+            return _make_err_response(
+                "Encountered an unknown error",
+                "unknown_error",
+                HTTPStatus.INTERNAL_SERVER_ERROR
+            )
 
     @app.route("/question", methods=["GET"])
     def pick_game_question():
@@ -1195,6 +1393,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/question/unrec", methods=["GET", "POST"])
     def unrec_question_resource():
+        """Resource for unrecorded questions"""
         if request.method == "GET":
             difficulty = request.args.get("difficultyType")
             batch_size = request.args.get("batchSize")
@@ -1222,13 +1421,24 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         cursor = qtpm.unrec_questions.find(query, {"qb_id": 1})
         question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
         if not question_ids:
-            app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
-            return "unrec_empty_qids", HTTPStatus.NOT_FOUND
+            # app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
+            # return "unrec_empty_qids", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                f"No unrecorded questions found for difficulty type '{difficulty}'",
+                "unrec_empty_qids",
+                HTTPStatus.NOT_FOUND,
+                log_msg=True
+            )
 
         next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
                                                             ["transcript"], batch_size)
         if next_questions is None:
-            return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+            # return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "No valid unrecorded questions found",
+                "unrec_corrupt_questions",
+                HTTPStatus.NOT_FOUND
+            )
         results = []
         for doc in next_questions:
             result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
@@ -1275,6 +1485,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     # DO NOT INCLUDE THE ROUTES BELOW IN DEPLOYMENT
     @app.route("/uploadtest/")
     def recording_listener_test():
+        """A form for testing pre_screen. Other methods are advisable due to this method being very limited."""
         if app.config["Q_ENV"] not in [DEV_ENV_NAME, TEST_ENV_NAME]:
             abort(HTTPStatus.NOT_FOUND)
         return render_template("uploadtest.html")
@@ -1397,9 +1608,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             err = None
         except jsonschema.exceptions.ValidationError as e:
             app.logger.error(f"Request arguments do not match schema: {e}")
-            response = make_response(str(e))
-            response.headers["Content-Type"] = "text/plain"
-            err = (response, HTTPStatus.BAD_REQUEST)
+            # response = make_response(str(e))
+            # response.headers["Content-Type"] = "text/plain"
+            # err = (response, HTTPStatus.BAD_REQUEST)
+            err = _make_err_response(
+                f"Request arguments do not match schema: {e}",
+                "validation_error",
+                HTTPStatus.BAD_REQUEST
+            )
         return err
 
     def _debug_variable(name: str, v, include_type=False, private=False):
@@ -1423,6 +1639,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app.logger.debug(f"{prefix}{name} = {val_pp}")
 
     def _update_prescreen_statuses():
+        """Update the status of all submissions in the status resource with the results from the queue and remove
+        expired resources."""
         # Update statuses from queue.
         # TODO: Maybe do this in batches
         while True:
@@ -1435,12 +1653,18 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 if type(result) is tuple and isinstance(result[1], Exception):
                     for submission in result[0]:
                         ps_doc = _get_ps_doc(name=submission)
+                        if ps_doc is None:
+                            app.logger.debug(f"No pointer found for submission '{submission}'. Ignoring")
+                            continue
                         _debug_variable("ps_doc", ps_doc)
                         ps_doc["status"] = "err"
                         ps_doc["err"] = "internal_error"
                         # ps_doc["extra"] = repr(result[1])
                 else:
                     ps_doc = _get_ps_doc(name=result["name"])
+                    if ps_doc is None:
+                        app.logger.debug(f"No pointer found for submission '{result['name']}'. Ignoring")
+                        continue
                     _debug_variable("ps_doc", ps_doc)
                     if result["case"] == "err":
                         ps_doc["status"] = "err"
@@ -1480,7 +1704,19 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         return None
 
-    def _make_err_response(msg: str, id_: str, status_code: int, extra: list = None):
+    def _make_err_response(msg: str, id_: str, status_code: int, extra: list = None, log_msg=False):
+        """
+        Construct a JSON error response with the given parameters. Also log the error message if specified.
+
+        :param msg: The human-readable error message to include
+        :param id_: The type of error it is
+        :param status_code: The HTTP status code to return
+        :param extra: Extra information to include regarding the error
+        :param log_msg: Whether to send the message to the log
+        :return: A tuple containing the JSON response and the status code
+        """
+        if log_msg:
+            app.logger.error(f"{msg}. Aborting")
         response = {
             "err": msg,
             "err_id": id_

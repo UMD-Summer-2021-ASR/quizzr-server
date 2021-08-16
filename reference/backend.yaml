@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.5.0
+  version: 0.6.0
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -98,11 +98,7 @@ paths:
                       - _id: C0cb6nKK5nQ8I12T4O4590hnnOPMm_Lxf7D9r7ZTrD4
                         transcript: Justo donec enim diam vulputate ut pharetra sit amet. Risus feugiat in ante metus dictum at. Faucibus et molestie ac feugiat sed. Eu mi bibendum neque egestas congue quisque egestas diam in. Et tortor at risus viverra adipiscing at in tellus integer. Leo duis ut diam quam nulla porttitor massa id neque. Euismod in pellentesque massa placerat duis ultricies lacus sed turpis.
         '404':
-          description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg'
+          $ref: '#/components/responses/Error'
       operationId: get_unprocessed_audio
       description: Retrieve a batch of unprocessed audio documents up to a limit specified by the `UNPROC_FIND_LIMIT` environment variable. Each audio document includes the ID of the audio document and the transcript (retrieved from the associated question document).
       parameters: []
@@ -130,11 +126,7 @@ paths:
                   - successes
                   - total
         '400':
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg'
+          $ref: '#/components/responses/Error'
       operationId: handle_processing_results
       requestBody:
         content:
@@ -230,11 +222,7 @@ paths:
               examples: {}
           headers: {}
         '400':
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg'
+          $ref: '#/components/responses/Error'
         '500':
           description: Internal Server Error
           content:
@@ -349,11 +337,7 @@ paths:
         '401':
           description: Unauthorized
         '404':
-          description: Not Found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg-JSON'
+          $ref: '#/components/responses/Error'
       operationId: handle_game_results
       description: Update the database with the results of a game session.
       requestBody:
@@ -1021,11 +1005,7 @@ paths:
         '201':
           description: Created
         '400':
-          description: Bad Request
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg'
+          $ref: '#/components/responses/Error'
         '500':
           description: Internal Server Error
       operationId: upload_questions
@@ -1106,11 +1086,7 @@ paths:
                     type: string
                     description: The secret key generated
         '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error-Msg-JSON'
+          $ref: '#/components/responses/Error'
       operationId: generate_game_key
       description: |-
         Generate a secret key to represent the socket server.
@@ -1215,12 +1191,30 @@ components:
               - bad_request
               - internal_error
           reason:
-            $ref: '#/components/schemas/Error-Msg'
+            $ref: '#/components/schemas/Error-Id'
         required:
           - type
           - reason
     Error-Msg:
-      title: Error
+      title: Error-Msg
+      type: object
+      description: A JSON error message that includes both a human-readable and a machine-readable error message.
+      properties:
+        err:
+          type: string
+          description: A human-readable form of the error message
+        err_id:
+          type: string
+          description: A machine-readable form of the error message
+        extra:
+          type: array
+          items: { }
+          description: 'Extra, machine-readable information to include for specificity'
+      required:
+        - err
+        - err_id
+    Error-Id:
+      title: Error-Id
       type: string
       description: A machine-readable error message
       examples:
@@ -1451,23 +1445,6 @@ components:
           00:01:01.123456 --> 00:01:02.123456
           <v Speaker 2>WORD4
         - ''
-    Error-Msg-JSON:
-      title: Error-Msg-JSON
-      type: object
-      description: A JSON variant of an error message that includes both a human-readable and a machine-readable error message.
-      properties:
-        err:
-          type: string
-          description: A human-readable form of the error message
-        err_id:
-          type: string
-          description: A machine-readable form of the error message
-        extra:
-          type: array
-          items: {}
-      required:
-        - err
-        - err_id
     Game-Ratings:
       title: Game-Ratings
       type: object
@@ -1510,7 +1487,7 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error-Msg-JSON'
+            $ref: '#/components/schemas/Error-Msg'
   securitySchemes:
     Firebase-Auth:
       type: http
