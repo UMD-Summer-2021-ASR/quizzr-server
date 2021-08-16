@@ -112,7 +112,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "USE_ID_TOKENS": True,
         "MAX_LEADERBOARD_SIZE": 200,
         "DEFAULT_LEADERBOARD_SIZE": 10,
-        "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1
+        "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1,
+        "DICTIONARY_NAME": "librispeech-lexicon.txt"
     }
 
     config_dir = os.path.join(app.instance_path, "config")
@@ -190,7 +191,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "error_dir": error_dir,
         "proc_config": app_conf["PROC_CONFIG"],
         "submission_file_types": app_conf["SUBMISSION_FILE_TYPES"],
-        "queue": prescreen_results_queue
+        "queue": prescreen_results_queue,
+        "dict_name": app_conf["DICTIONARY_NAME"]
     })
     qw_process.daemon = True
     app.logger.debug("Finished instantiating process")

@@ -834,16 +834,12 @@ def delete_submission(directory: str, submission_name: str, file_types: List[str
             os.remove(file_path)
 
 
-def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, error_dir, proc_config, queue, submission_file_types=None):
+def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, error_dir, proc_config, queue,
+                  dict_name, submission_file_types=None):
     # logger.info("Initializing pre-screening program...")
     # logger.debug("Instantiating QuizzrProcessorHead...")
     qtpm = QuizzrTPM(db_name, tpm_config, api, firebase_app_specifier)
-    qph = QuizzrProcessorHead(
-        qtpm,
-        rec_dir,
-        proc_config,
-        submission_file_types
-    )
+    qph = QuizzrProcessorHead(qtpm, rec_dir, proc_config, dict_name, submission_file_types)
     # logger.debug("Finished instantiating QuizzrProcessorHead")
     # logger.debug("Instantiating QuizzrWatcher...")
     qw = QuizzrWatcher(queue_dir, error_dir, qph.execute, queue)
