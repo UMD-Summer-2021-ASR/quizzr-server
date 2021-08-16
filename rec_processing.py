@@ -104,27 +104,61 @@ class QuizzrWatcher:
 
 
 class QuizzrProcessorHead:
-    def __init__(self, qtpm: QuizzrTPM, directory: str, config: dict, submission_file_types: List[str] = None):
+    def __init__(self, qtpm: QuizzrTPM, directory: str, config: dict, dict_name: str,
+                 submission_file_types: List[str] = None):
         self.qtpm = qtpm
+
+        self.users = self.qtpm.database.Users
+        self.rec_questions = self.qtpm.database.RecordedQuestions
+        self.unrec_questions = self.qtpm.database.UnrecordedQuestions
+        self.audio = self.qtpm.database.Audio
+        self.unproc_audio = self.qtpm.database.UnprocessedAudio
+
         if submission_file_types is None:
             self.submission_file_types = ["wav", "json"]
         else:
             self.submission_file_types = submission_file_types
         self.directory = directory  # May be used for the Montreal Forced Aligner
-        self.rec_directory = os.path.join(self.directory, "queue")
-        self.qp = QuizzrProcessor(qtpm.database, self.rec_directory, config, submission_file_types)
-        if not os.path.exists(self.rec_directory):
-            os.makedirs(self.rec_directory)
+        self.rec_dir = os.path.join(self.directory, "queue")
+        self.out_dir = os.path.join(self.directory, "output")
+        self.dict_path = os.path.join(self.directory, "dictionary", dict_name)
+        self.qp = QuizzrProcessor(qtpm.database, self.rec_dir, config, submission_file_types)
+        if not os.path.exists(self.rec_dir):
+            os.makedirs(self.rec_dir)
+        if not os.path.exists(self.out_dir):
+            os.makedirs(self.out_dir)
         self.logger = logging.getLogger(__name__)
 
     def execute(self, submissions: List[str]):
-        results = self.qp.pick_submissions(submissions)
+        self.logger.info(f"Gathering metadata for {len(submissions)} submissions...")
+        sub2meta = self.get_metadata(submissions)
+        psc_submissions = []  # Submissions to pre-screen
+        for submission, metadata in sub2meta.items():
+            if "recType" not in metadata:
+                self.logger.error("Metadata does not contain required field 'recType'. Skipping")
+                continue
+            rec_type = metadata["recType"]
+            rec_path = os.path.join(self.rec_dir, submission) + ".wav"
+            dst_dir = os.path.join(self.directory, rec_type)
+            rec_dst_path = os.path.join(dst_dir, submission) + ".wav"
+            os.makedirs(dst_dir, exist_ok=True)
+            os.rename(rec_path, rec_dst_path)
+            if rec_type == "normal":
+                transcript = self.retrieve_transcript(metadata)
+                t_dst_path = os.path.join(dst_dir, submission) + ".txt"
+                with open(t_dst_path, "w") as f:
+                    f.write(transcript)
+                psc_submissions.append(submission)
+
+        # Security advisory: Be careful when giving user input for any parameter used in this command.
+        os.system(f"mfa align {os.path.join(self.directory, 'normal')} {self.dict_path} english {self.out_dir}")
+        results = self.qp.pick_submissions(psc_submissions)
 
         # Split by recType
         self.logger.info("Preparing results for upload...")
         file_paths = {}
         for submission in results:
-            file_path = os.path.join(self.rec_directory, submission) + ".wav"
+            file_path = os.path.join(self.rec_dir, submission) + ".wav"
             if results[submission]["case"] == "accepted":
                 sub_rec_type = results[submission]["metadata"]["recType"]
                 if sub_rec_type not in file_paths:
@@ -162,7 +196,7 @@ class QuizzrProcessorHead:
 
         for submission in results:
             self.logger.info(f"Removing submission with name '{submission}'")
-            delete_submission(self.rec_directory, submission, self.submission_file_types)
+            delete_submission(self.rec_dir, submission, self.submission_file_types)
             end_result = {"name": submission, "case": results[submission]["case"]}
             if end_result["case"] == "err":
                 end_result["err"] = results[submission]["err"]
@@ -170,13 +204,80 @@ class QuizzrProcessorHead:
 
         return summary
 
+    def get_metadata(self, submissions: List[str]) -> Dict[str, Dict[str, str]]:
+        """
+        Return the metadata of each submission (a JSON file) if available.
+
+        :param submissions: The names of each submission
+        :return: A dictionary mapping submission names to metadata for each submission that has metadata
+        """
+        sub2meta = {}
+        for submission in submissions:
+            submission_path = os.path.join(self.rec_dir, submission)
+            if not os.path.exists(submission_path + ".json"):
+                self.logger.warning(f"Metadata for submission {submission} not found. Skipping")
+                continue
+            with open(submission_path + ".json", "r") as meta_f:
+                sub2meta[submission] = bson.json_util.loads(meta_f.read())
+        return sub2meta
+
+    def retrieve_transcript(self, metadata: dict):
+        qid = metadata.get("qb_id")
+        self.logger.debug(f"{type(qid)} qid = {qid!r}")
+
+        if qid is None:
+            self.logger.error(f"Question ID not found. Skipping")
+            return {"err": "qid_not_found"}
+
+        query = {"qb_id": qid}
+
+        sid = metadata.get("sentenceId")
+        self.logger.debug(f"{type(sid)} sid = {sid!r}")
+        if sid is None:
+            self.logger.debug(f"Sentence ID not found. Continuing without sentence ID")
+            # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
+            # results[submission]["err"] = "sid_not_found"
+            # continue
+        else:
+            query["sentenceId"] = sid
+
+        self.logger.debug("Finding question in UnrecordedQuestions...")
+        question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+        if question is None:
+            self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
+            question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
+
+        if question is None:
+            self.logger.error("Question not found. Skipping submission")
+            return {"err": "sentence_not_found"}
+
+        r_transcript = question.get("transcript")
+        self.logger.debug(f"r_transcript = {r_transcript!r}")
+
+        if r_transcript is None:
+            self.logger.error("Transcript not found. Skipping submission")
+            return {"err": "transcript_not_found"}
+
+        # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
+        if "__sentenceIndex" in metadata:
+            self.logger.info("Attempting transcript segmentation...")
+            if "tokenizations" in question:
+                slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+                r_transcript = r_transcript[slice_start:slice_end]
+            else:
+                self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
+
+        self.logger.debug(f"r_transcript = {r_transcript!r}")
+
+        return r_transcript
+
 
 class QuizzrProcessor:
     def __init__(self, database: Database, directory: str, config: dict, submission_file_types: List[str]):
         self.logger = logging.getLogger(__name__)
         self.submission_file_types = submission_file_types
         self.config = config
-        self.DIRECTORY = directory
+        self.directory = directory
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
@@ -197,6 +298,7 @@ class QuizzrProcessor:
                  is "accepted", it will contain a "metadata" key and may contain a "vtt" and "accuracy" key if it is a
                  normal recording. If the case is "err", it will include a machine-readable error message.
         """
+        # Iterate through submissions.
         self.logger.info(f"Gathering metadata for {len(submissions)} submission(s)...")
         sub2meta = self.get_metadata(submissions)
         self.logger.debug(f"sub2meta = {sub2meta!r}")
@@ -240,7 +342,7 @@ class QuizzrProcessor:
                             "metadata": sub2meta[submission]
                         }
                         # self.logger.info(f"Removing submission with name '{submission}'")
-                        # delete_submission(self.DIRECTORY, submission, self.submission_file_types)
+                        # delete_submission(self.directory, submission, self.submission_file_types)
                     else:
                         final_results[submission] = {
                             "case": "accepted",
@@ -293,7 +395,7 @@ class QuizzrProcessor:
         # results = {}
         # for submission in submissions:
         #     results[submission] = {}
-        #     file_path = os.path.join(self.DIRECTORY, submission)
+        #     file_path = os.path.join(self.directory, submission)
         #     wav_file_path = file_path + ".wav"
         #     # json_file_path = file_path + ".json"
         #     if submission not in sub2meta:
@@ -368,7 +470,7 @@ class QuizzrProcessor:
         #     self.logger.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
         results = []
         for submission in submissions:
-            # file_path = os.path.join(self.DIRECTORY, submission)
+            # file_path = os.path.join(self.directory, submission)
             # wav_file_path = file_path + ".wav"
             # json_file_path = file_path + ".json"
             # if submission not in sub2meta:
@@ -489,7 +591,7 @@ class QuizzrProcessor:
         return results
 
     def preprocess_one_submission(self, submission: str, metadata: dict):
-        file_path = os.path.join(self.DIRECTORY, submission)
+        file_path = os.path.join(self.directory, submission)
         wav_file_path = file_path + ".wav"
         qid = metadata.get("qb_id")
         self.logger.debug(f"{type(qid)} qid = {qid!r}")
@@ -587,7 +689,7 @@ class QuizzrProcessor:
         """
         sub2meta = {}
         for submission in submissions:
-            submission_path = os.path.join(self.DIRECTORY, submission)
+            submission_path = os.path.join(self.directory, submission)
             if not os.path.exists(submission_path + ".json"):
                 continue
             with open(submission_path + ".json", "r") as meta_f:
@@ -595,7 +697,7 @@ class QuizzrProcessor:
         return sub2meta
 
     def get_duration(self, submission: str) -> float:
-        submission_path = os.path.join(self.DIRECTORY, submission) + ".wav"
+        submission_path = os.path.join(self.directory, submission) + ".wav"
         with closing(wave.open(submission_path, "r")) as f:
             duration = f.getnframes() / f.getframerate()
         return duration
