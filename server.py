@@ -112,7 +112,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "USE_ID_TOKENS": True,
         "MAX_LEADERBOARD_SIZE": 200,
         "DEFAULT_LEADERBOARD_SIZE": 10,
-        "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1,
+        # "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1,
         "MAX_USERNAME_LENGTH": 16,
         "USERNAME_CHAR_SET": string.ascii_letters + string.digits
     }
@@ -361,6 +361,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             for field in results_projection:
                 if field in audio_doc:
                     entry[field] = audio_doc[field]
+            if "tokenizationId" in audio_doc:
+                entry["tokenizationId"] = audio_doc["tokenizationId"]
             id2entries[id_key].append(entry)
             qids.append(qid)
             audio_doc_count += 1
@@ -391,10 +393,15 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             qid = question["qb_id"]
             sentence_id = question.get("sentenceId")
             id_key = "_".join([str(qid), str(sentence_id)]) if sentence_id else str(qid)
-            transcript = question.get("transcript")
-            if transcript:
+            orig_transcript = question.get("transcript")
+            if orig_transcript:
                 entries = id2entries[id_key]
                 for entry in entries:
+                    if "tokenizations" in question and "tokenizationId" in entry:
+                        slice_start, slice_end = question["tokenizations"][entry.pop("tokenizationId")]
+                        transcript = orig_transcript[slice_start:slice_end]
+                    else:
+                        transcript = orig_transcript
                     entry["transcript"] = transcript
 
         _debug_variable("id2entries", id2entries)
@@ -502,7 +509,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 metadata["sentenceId"] = int(sentence_id)
             elif rec_type == "normal" and len(recordings) > 1:
                 app.logger.debug("Field 'sentenceId' not specified in batch submission")
-                metadata["__sentenceIndex"] = i
+                metadata["tokenizationId"] = i
 
             submissions.append((recording, metadata))
 
@@ -1235,30 +1242,39 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             try:
                 result = qtpm.modify_profile(user_id, update_args)
             except UsernameTakenError as e:
-                app.logger.error(f"Username already taken: {e}. Aborting")
-                return f"username_taken: {e}", HTTPStatus.BAD_REQUEST
+                # app.logger.error(f"Username already taken: {e}. Aborting")
+                # return f"username_taken: {e}", HTTPStatus.BAD_REQUEST
+                return _make_err_response(
+                    f"Username already exists: {e}",
+                    "username_exists",
+                    HTTPStatus.BAD_REQUEST,
+                    [str(e)],
+                    True
+                )
 
-            if result:
+            if result.matched_count == 1:
                 app.logger.info("User profile successfully modified")
                 # return {"msg": "user_modified"}, HTTPStatus.OK
                 return '', HTTPStatus.OK
-            app.logger.error("Encountered an unknown error")
             return _make_err_response(
-                "Encountered an unknown error",
-                "unknown_error",
-                HTTPStatus.INTERNAL_SERVER_ERROR
+                f"No such user: {user_id}",
+                "user_not_found",
+                HTTPStatus.NOT_FOUND,
+                [user_id],
+                True
             )
         elif request.method == "DELETE":
             result = qtpm.delete_profile(user_id)
-            if result:
+            if result.deleted_count == 1:
                 app.logger.info("User profile successfully deleted")
                 # return {"msg": "user_deleted"}, HTTPStatus.OK
                 return '', HTTPStatus.OK
-            app.logger.error("Encountered an unknown error")
             return _make_err_response(
-                "Encountered an unknown error",
-                "unknown_error",
-                HTTPStatus.INTERNAL_SERVER_ERROR
+                f"No such user: {user_id}",
+                "user_not_found",
+                HTTPStatus.NOT_FOUND,
+                [user_id],
+                True
             )
 
     @app.route("/profile/<username>", methods=["GET", "PATCH", "DELETE"])
@@ -1275,27 +1291,29 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         elif request.method == "PATCH":
             update_args = request.get_json()
             result = qtpm.modify_profile(other_user_id, update_args)
-            if result:
+            if result.matched_count == 1:
                 app.logger.info("User profile successfully modified")
                 # return "other_user_modified", HTTPStatus.OK
                 return '', HTTPStatus.OK
-            app.logger.error("Encountered an unknown error")
             return _make_err_response(
-                "Encountered an unknown error",
-                "unknown_error",
-                HTTPStatus.INTERNAL_SERVER_ERROR
+                f"No such user: {other_user_id}",
+                "user_not_found",
+                HTTPStatus.NOT_FOUND,
+                [other_user_id],
+                True
             )
         elif request.method == "DELETE":
             result = qtpm.delete_profile(other_user_id)
-            if result:
+            if result.deleted_count == 1:
                 app.logger.info("User profile successfully deleted")
                 # return "other_user_deleted", HTTPStatus.OK
                 return '', HTTPStatus.OK
-            app.logger.error("Encountered an unknown error")
             return _make_err_response(
-                "Encountered an unknown error",
-                "unknown_error",
-                HTTPStatus.INTERNAL_SERVER_ERROR
+                f"No such user: {other_user_id}",
+                "user_not_found",
+                HTTPStatus.NOT_FOUND,
+                [other_user_id],
+                True
             )
 
     @app.route("/question", methods=["GET"])
@@ -1341,17 +1359,18 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         batch_size = int(request.args.get("batchSize") or 1)
         pipeline = [
             {'$group': {'_id': '$qb_id', 'category': {'$first': '$category'}}},
+            {'$match': {'$expr': {'$not': {'$eq': ['$_id', None]}}}},
             {'$sample': {'size': batch_size}},
             {'$lookup': {
                 'from': 'Audio',
                 'as': 'audio',
                 'let': {'qb_id': '$_id'},
                 'pipeline': [
-                    {'$match': {'$expr': {'$eq': ['$qb_id', '$$qb_id']}}},
+                    {'$match': {'$expr': {'$eq': ['$qb_id', '$$qb_id']}, 'recType': 'normal'}},
                     {'$set': {'totalScore': {'$add': ['$score.wer', '$score.mer', '$score.wil']}}},
                     {'$sort': {'totalScore': 1}},
                     {'$group': {
-                        '_id': {'userId': '$userId', 'sentenceId': '$sentenceId'},
+                        '_id': {'userId': '$userId', 'sentenceId': '$sentenceId', 'tokenizationId': '$tokenizationId'},
                         'id': {'$first': '$_id'},
                         'vtt': {'$first': '$vtt'},
                         'gentleVtt': {'$first': '$gentleVtt'},
@@ -1363,6 +1382,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                         'audio': {'$push': {
                             'id': '$id',
                             'sentenceId': '$_id.sentenceId',
+                            'tokenizationId': '$_id.tokenizationId',
                             'vtt': '$vtt',
                             'gentleVtt': '$gentleVtt'
                         }}
@@ -1389,6 +1409,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         for doc in cursor:
             doc["qb_id"] = doc.pop("_id")
             questions.append(doc)
+        if not questions:
+            return _make_err_response(
+                "Could not find any questions",
+                "questions_not_found",
+                HTTPStatus.NOT_FOUND,
+                log_msg=True
+            )
         return {"results": questions}
 
     @app.route("/question/unrec", methods=["GET", "POST"])
@@ -1449,7 +1476,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             results.append(result_doc)
         return {"results": results, "errors": errors}
 
-    def upload_questions(arguments_batch: Dict[str, List[dict]]) -> dict:
+    def upload_questions(arguments_batch: Dict[str, List[dict]]) -> Tuple[str, int]:
         """
         Upload a batch of unrecorded questions.
 
@@ -1462,7 +1489,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app.logger.info(f"Uploading {len(arguments_list)} unrecorded question(s)...")
         results = qtpm.unrec_questions.insert_many(arguments_list)
         app.logger.info(f"Successfully uploaded {len(results.inserted_ids)} question(s)")
-        return {"msg": "unrec_question.upload_success"}
+        return '', HTTPStatus.OK
 
     @app.route("/validate", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"])
     def check_token():
@@ -1477,8 +1504,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             app.logger.info(f"Profile not found: {e}. Subject registered as 'anonymous'")
         except MalformedProfileError as e:
             msg = str(e)
-            app.logger.error(f"{msg}. Aborting")
-            return f"{msg}\n", HTTPStatus.UNAUTHORIZED
+            # app.logger.error(f"{msg}. Aborting")
+            # return f"{msg}\n", HTTPStatus.UNAUTHORIZED
+            return _make_err_response(msg, "malformed_profile", HTTPStatus.UNAUTHORIZED, log_msg=True)
 
         return {"subject": subject, "extra": {}}, HTTPStatus.OK
 

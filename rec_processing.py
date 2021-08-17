@@ -294,7 +294,7 @@ class QuizzrProcessor:
 
         :param submissions: The list of submissions to process
         :param sub2meta: A dictionary mapping submissions to metadata, which must contain the qb_id and should contain
-                         either a sentenceId or a __sentenceIndex
+                         either a sentenceId or a tokenizationId
         :return: A dictionary mapping submissions to results, which contain either an "accuracy" and "vtt" key or an
                  "err" key.
         """
@@ -352,11 +352,11 @@ class QuizzrProcessor:
         #         results[submission]["err"] = "transcript_not_found"
         #         continue
         #
-        #     # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
-        #     if "__sentenceIndex" in metadata:
+        #     # tokenizationId is only included if no sentenceId is specified and the submission is part of a batch.
+        #     if "tokenizationId" in metadata:
         #         self.logger.info("Attempting transcript segmentation...")
         #         if "tokenizations" in question:
-        #             slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+        #             slice_start, slice_end = question["tokenizations"][metadata["tokenizationId"]]
         #             r_transcript = r_transcript[slice_start:slice_end]
         #         else:
         #             self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
@@ -428,11 +428,11 @@ class QuizzrProcessor:
             #     results.append((submission, {"err": "transcript_not_found"}))
             #     continue
             #
-            # # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
-            # if "__sentenceIndex" in metadata:
+            # # tokenizationId is only included if no sentenceId is specified and the submission is part of a batch.
+            # if "tokenizationId" in metadata:
             #     self.logger.info("Attempting transcript segmentation...")
             #     if "tokenizations" in question:
-            #         slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+            #         slice_start, slice_end = question["tokenizations"][metadata["tokenizationId"]]
             #         r_transcript = r_transcript[slice_start:slice_end]
             #     else:
             #         self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
@@ -542,11 +542,11 @@ class QuizzrProcessor:
             self.logger.error("Transcript not found. Skipping submission")
             return {"err": "transcript_not_found"}
 
-        # __sentenceIndex is only included if no sentenceId is specified and the submission is part of a batch.
-        if "__sentenceIndex" in metadata:
+        # tokenizationId is only included if no sentenceId is specified and the submission is part of a batch.
+        if "tokenizationId" in metadata:
             self.logger.info("Attempting transcript segmentation...")
             if "tokenizations" in question:
-                slice_start, slice_end = question["tokenizations"][metadata["__sentenceIndex"]]
+                slice_start, slice_end = question["tokenizations"][metadata["tokenizationId"]]
                 r_transcript = r_transcript[slice_start:slice_end]
             else:
                 self.logger.info("Could not segment transcript. Submission may not pass pre-screen")

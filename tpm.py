@@ -345,7 +345,7 @@ class QuizzrTPM:
                     if field not in doc:
                         valid_doc = False
                         self.logger.warning(f"Question does not contain required field '{field}'. Ignoring")
-                        errors.append((repr(doc["_id"]), f"missing_{field}"))
+                        errors.append({"questionId": repr(doc["_id"]), "reason": f"missing_{field}"})
                         break
                 if valid_doc:
                     sentences.append(doc)
