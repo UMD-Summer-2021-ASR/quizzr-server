@@ -5,9 +5,11 @@ import yaml
 
 
 class QuizzrAPISpec:
+    """A class containing an OpenAPI specification and several utility functions"""
     STUB = 1
 
     def __init__(self, api_path):
+        """Load an OpenAPI specification from a YAML file."""
         with open(api_path) as api_f:
             self.api = yaml.load(api_f.read(), Loader=yaml.FullLoader)
 

@@ -49,7 +49,8 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `USE_ID_TOKENS` A configuration option specifying whether to use a Firebase ID token or to use the raw contents for identifying the user. Has no effect when `TESTING` is False.
 * `MAX_LEADERBOARD_SIZE` The maximum number of entries allowable on the leaderboard.
 * `DEFAULT_LEADERBOARD_SIZE` The default number of entries on the leaderboard.
-* `QW_SHUTDOWN_INTERVAL_THRESHOLD` Shutdown the server if the interval between restarts of the pre-screening program goes below this value.
+* `MAX_USERNAME_LENGTH` The maximum allowable number of characters in a username.
+* `USERNAME_CHAR_SET` A string containing all allowable characters in a username.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
@@ -91,7 +92,8 @@ The following JSON data shows the default values of each configuration field. Yo
   "USE_ID_TOKENS": true,
   "MAX_LEADERBOARD_SIZE": 200,
   "DEFAULT_LEADERBOARD_SIZE": 10,
-  "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1
+  "MAX_USERNAME_LENGTH": 16,
+  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 }
 ```
 

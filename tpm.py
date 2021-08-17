@@ -26,19 +26,18 @@ class QuizzrTPM:
 
     G_PATH_DELIMITER = "/"
 
-    def __init__(self,
-                 database_name: str,
-                 config: dict, api: QuizzrAPISpec, firebase_app_specifier: Union[str, firebase_admin.App]):
+    def __init__(self, database_name: str, config: dict, api: QuizzrAPISpec,
+                 firebase_app_specifier: Union[str, firebase_admin.App], logger=None):
         """
+        Create a MongoClient and initialize a Firebase app, or use an existing one if provided.
 
-
-        :param database_name:
-        :param config:
-        :param api:
+        :param database_name: The name of the MongoDB database to use
+        :param config: The configuration to use
+        :param api: An instance of QuizzrAPISpec containing the OpenAPI specification
         :param firebase_app_specifier: A string specifying the path to the service account key or a Firebase app
         """
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger or logging.getLogger(__name__)
         self.config = config
 
         self.api = api
@@ -346,7 +345,7 @@ class QuizzrTPM:
                     if field not in doc:
                         valid_doc = False
                         self.logger.warning(f"Question does not contain required field '{field}'. Ignoring")
-                        errors.append((repr(doc["_id"]), f"missing_{field}"))
+                        errors.append({"questionId": repr(doc["_id"]), "reason": f"missing_{field}"})
                         break
                 if valid_doc:
                     sentences.append(doc)
