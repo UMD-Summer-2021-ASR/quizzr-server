@@ -66,7 +66,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     log_path = os.path.join(log_dir, "sv_log.log")
-    handler = logging.handlers.TimedRotatingFileHandler(log_path, when='midnight', backupCount=7)
+    handler = logging.handlers.TimedRotatingFileHandler(log_path, when='h', interval=12, backupCount=13)
     formatter = logging.Formatter("[%(asctime)s] %(levelname)s - %(name)s: %(message)s")
     handler.setFormatter(formatter)
     app.logger.addHandler(handler)
