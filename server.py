@@ -232,25 +232,25 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     # app.logger.debug("Finished registering signal handler")
     app.logger.debug("Starting process...")
 
-    def restart_qw_process(signal_, frame):
-        app.logger.info("Received SIGCHLD")
-        app.logger.debug(f"app_attributes = {app_attributes}")
-        pid, stat = os.waitpid(0, 0)
-        if "qwPid" not in app_attributes or pid != app_attributes["qwPid"]:
-            app.logger.info("pid does not match or qwPid not set. Ignoring")
-            return
-        app.logger.debug(f"stat = {stat}")
-        app.logger.info("Restarting pre-screening program...")
-        if "qwStartTime" in app_attributes:
-            since_prev_restart = time.time() - app_attributes["qwStartTime"]
-            if since_prev_restart < app.config["QW_SHUTDOWN_INTERVAL_THRESHOLD"]:
-                # Might be better to make it use a backoff strategy.
-                app.logger.critical("Unable to start up pre-screening program. Forcing shutdown...")
-                exit(1)
-        app_attributes["qwStartTime"] = time.time()
-        qw_process.start()
-        app_attributes["qwPid"] = qw_process.pid
-        app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
+    # def restart_qw_process(signal_, frame):
+    #     app.logger.info("Received SIGCHLD")
+    #     app.logger.debug(f"app_attributes = {app_attributes}")
+    #     pid, stat = os.waitpid(0, 0)
+    #     if "qwPid" not in app_attributes or pid != app_attributes["qwPid"]:
+    #         app.logger.info("pid does not match or qwPid not set. Ignoring")
+    #         return
+    #     app.logger.debug(f"stat = {stat}")
+    #     app.logger.info("Restarting pre-screening program...")
+    #     if "qwStartTime" in app_attributes:
+    #         since_prev_restart = time.time() - app_attributes["qwStartTime"]
+    #         if since_prev_restart < app.config["QW_SHUTDOWN_INTERVAL_THRESHOLD"]:
+    #             # Might be better to make it use a backoff strategy.
+    #             app.logger.critical("Unable to start up pre-screening program. Forcing shutdown...")
+    #             exit(1)
+    #     app_attributes["qwStartTime"] = time.time()
+    #     qw_process.start()
+    #     app_attributes["qwPid"] = qw_process.pid
+    #     app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
 
     # if not app.config["DEBUG"]:
     #     old_sigh = signal.signal(signal.SIGCHLD, restart_qw_process)
@@ -260,7 +260,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app_attributes["qwPid"] = qw_process.pid
     app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
     app.logger.info("Started pre-screening program")
-    socket_server_key = {}
+    secret_keys = {}
     prescreen_statuses = []
 
     pprinter = pprint.PrettyPrinter()
@@ -681,23 +681,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.post("/socket/key")
     def generate_game_key():
-        """Generate a secret key to represent the socket server.
+        """Alias for /backend/key with the "name" argument being "socket".
 
         WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
-        if socket_server_key:
-            # app.logger.error("Secret key for socket server already exists. Aborting")
-            # return "secret_key_exists", HTTPStatus.UNAUTHORIZED
-            return _make_err_response(
-                "Secret key for socket server already exists",
-                "secret_key_exists",
-                HTTPStatus.UNAUTHORIZED,
-                log_msg=True
-            )
-        app.logger.info("Generating secret key for socket server...")
-        key = token_urlsafe(256)
-        socket_server_key["value"] = key
-        app.logger.info("Successfully generated secret key for socket server")
-        return {"key": key}
+        return _gen_secret_key("socket")
 
     @app.put("/game_results")
     def handle_game_results():
@@ -707,10 +694,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """
         secret_key_arg = request.headers.get("Authorization")
         _debug_variable("secret_key_arg", secret_key_arg, private=True)
-        if secret_key_arg != socket_server_key["value"]:
-            app.logger.info("Secret key does not match. Access to resource denied")
-            abort(HTTPStatus.UNAUTHORIZED)
-        app.logger.info("Access to resource granted")
+
+        _verify_backend_key("socket", secret_key_arg)
+
         session_results = request.get_json()
         _debug_variable("session_results", session_results)
         if "category" in session_results:
@@ -1090,6 +1076,31 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
         return {"successful": results.matched_count, "requested": len(session_results["users"])}
 
+    @app.post("/backend/key")
+    def generate_secret_key():
+        """Generate a secret key to represent a given backend component.
+
+        WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
+
+        args = request.get_json()
+        if args is None:
+            return _make_err_response(
+                "No arguments specified",
+                "no_args",
+                HTTPStatus.BAD_REQUEST,
+                log_msg=True
+            )
+        if "name" not in args:
+            return _make_err_response(
+                "Argument 'name' not provided",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["name"],
+                True
+            )
+        component_name = args["name"]
+        return _gen_secret_key(component_name)
+
     @app.route("/hls/vtt/<audio_id>", methods=["GET"])
     def get_vtt(audio_id):
         """
@@ -1098,6 +1109,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :param audio_id: The ID of the document in the Audio collection
         :return: A response containing the VTT as an octet stream
         """
+        secret_key_arg = request.headers.get("Authorization")
+        _debug_variable("secret_key_arg", secret_key_arg, private=True)
+
+        _verify_backend_key("hls", secret_key_arg)
+
         audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
         if audio_doc is None or audio_doc["vtt"] is None:
             abort(HTTPStatus.NOT_FOUND)
@@ -1476,13 +1492,20 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             results.append(result_doc)
         return {"results": results, "errors": errors}
 
-    def upload_questions(arguments_batch: Dict[str, List[dict]]) -> Tuple[str, int]:
+    def upload_questions(arguments_batch: Dict[str, List[dict]]) -> Tuple[Union[str, dict], int]:
         """
         Upload a batch of unrecorded questions.
 
         :param arguments_batch: A dictionary containing the list of "arguments"
         :return: A dictionary containing a "msg" stating that the upload was successful if nothing went wrong
         """
+        if arguments_batch is None:
+            return _make_err_response(
+                "No arguments specified",
+                "no_args",
+                HTTPStatus.BAD_REQUEST,
+                log_msg=True
+            )
         arguments_list = arguments_batch["arguments"]
         _debug_variable("arguments_list", arguments_list)
 
@@ -1521,6 +1544,28 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     def _get_next_submission_name():
         """Return a filename safe date-timestamp of the current system time"""
         return str(datetime.now().strftime("%Y.%m.%d_%H.%M.%S.%f"))
+
+    def _gen_secret_key(component_name):
+        """
+        Generate a secret key for the component name, add it to the secret keys dictionary, and return the resulting
+        response.
+
+        :param component_name: The name of the component to generate the key for
+        :return: A JSON response containing either a key or an error response
+        """
+        if component_name in secret_keys:
+            return _make_err_response(
+                f"Secret key for component name '{component_name}' already exists",
+                "secret_key_exists",
+                HTTPStatus.UNAUTHORIZED,
+                [component_name],
+                True
+            )
+        app.logger.info(f"Generating secret key for component name '{component_name}'...")
+        key = token_urlsafe(256)
+        secret_keys[component_name] = key
+        app.logger.info(f"Successfully generated secret key for component name '{component_name}'")
+        return {"key": key}
 
     def _save_recording(directory: str, recording: werkzeug.datastructures.FileStorage, metadata: dict):
         """Write a WAV file and its JSON metadata to disk."""
@@ -1601,6 +1646,22 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
         return decoded
+
+    def _verify_backend_key(component_name: str, secret_key: str):
+        """
+        Run the logic flow for verifying a backend key, complete with logging messages. Only runnable in the context of
+        a view function.
+
+        :param component_name: The key to index in the secret_keys variable
+        :param secret_key: The value of the secret key given
+        """
+        if component_name not in secret_keys:
+            app.logger.info(f"Secret key for component '{component_name}' not generated. Access to resource denied")
+            abort(HTTPStatus.UNAUTHORIZED)
+        if secret_key != secret_keys[component_name]:
+            app.logger.info(f"Secret key for component '{component_name}' does not match. Access to resource denied")
+            abort(HTTPStatus.UNAUTHORIZED)
+        app.logger.info("Access to resource granted")
 
     def _get_private_data_string(original):
         """
