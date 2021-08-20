@@ -530,6 +530,16 @@ paths:
           description: Not Found
       operationId: get_vtt
       description: Get a VTT from an audio document
+      parameters:
+        - schema:
+            type: string
+            default: normal
+            enum:
+              - normal
+              - gentle
+          in: query
+          name: t
+          description: 'The type of VTT to get. Defaults to "normal", or the "vtt" field'
   /leaderboard:
     get:
       summary: Get Leaderboard
