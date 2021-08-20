@@ -692,10 +692,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         Update the database with the results of a game session.
         Precondition: session_results["questionStats"]["played"] != 0
         """
-        secret_key_arg = request.headers.get("Authorization")
-        _debug_variable("secret_key_arg", secret_key_arg, private=True)
-
-        _verify_backend_key("socket", secret_key_arg)
 
         session_results = request.get_json()
         _debug_variable("session_results", session_results)
@@ -1109,15 +1105,24 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :param audio_id: The ID of the document in the Audio collection
         :return: A response containing the VTT as an octet stream
         """
-        secret_key_arg = request.headers.get("Authorization")
-        _debug_variable("secret_key_arg", secret_key_arg, private=True)
 
-        _verify_backend_key("hls", secret_key_arg)
-
-        audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
-        if audio_doc is None or audio_doc["vtt"] is None:
+        type_arg = request.args.get("t") or "normal"
+        if type_arg == "gentle":
+            field_name = "gentleVtt"
+        elif type_arg == "normal":
+            field_name = "vtt"
+        else:
+            app.logger.error(f"No such VTT type '{type_arg}'. Aborting")
+            return _make_err_response(
+                f"No such VTT type '{type_arg}'. Valid types: {', '.join(['gentle', 'normal'])}",
+                "invalid_arg",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                ["t", type_arg]
+            )
+        audio_doc = qtpm.audio.find_one({"_id": audio_id}, {field_name: 1})
+        if audio_doc is None or audio_doc.get(field_name) is None:
             abort(HTTPStatus.NOT_FOUND)
-        response = make_response(bytes(audio_doc["vtt"], "utf-8"))
+        response = make_response(bytes(audio_doc[field_name], "utf-8"))
         response.headers["Content-Type"] = "application/octet-stream"
         return response
 
@@ -1518,6 +1523,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     def check_token():
         """Endpoint for ORY Oathkeeper to validate a Bearer token. Accepts every standard method type because
         Oathkeeper also forwards the method type."""
+        backend_name = request.args.get("backend")
+        if backend_name:
+            _verify_backend_key(backend_name)
+            return {"subject": backend_name}
         decoded = _verify_id_token()
         user_id = decoded["uid"]
         try:
@@ -1642,19 +1651,28 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             abort(HTTPStatus.UNAUTHORIZED)
         except auth.CertificateFetchError:
             app.logger.error("Could not fetch certificate. Aborting")
+            app.logger.error("Could not fetch certificate. Aborting")
             decoded = None
             abort(HTTPStatus.INTERNAL_SERVER_ERROR)
 
         return decoded
 
-    def _verify_backend_key(component_name: str, secret_key: str):
+    def _verify_backend_key(component_name: str):
         """
         Run the logic flow for verifying a backend key, complete with logging messages. Only runnable in the context of
         a view function.
 
         :param component_name: The key to index in the secret_keys variable
-        :param secret_key: The value of the secret key given
         """
+        app.logger.info("Retrieving secret key from header 'Authorization'...")
+        secret_key = request.headers.get("Authorization")
+
+        _debug_variable("secret_key", secret_key, private=True)
+
+        prefix = "Bearer "
+        if secret_key.startswith(prefix):
+            secret_key = secret_key[len(prefix):]
+
         if component_name not in secret_keys:
             app.logger.info(f"Secret key for component '{component_name}' not generated. Access to resource denied")
             abort(HTTPStatus.UNAUTHORIZED)
