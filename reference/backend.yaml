@@ -330,6 +330,45 @@ paths:
       parameters: []
       security:
         - Firebase-Auth: []
+  /backend/key:
+    post:
+      summary: Generate Backend Key
+      tags:
+        - internal
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                    description: The secret key generated
+                required:
+                  - key
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+      operationId: generate_secret_key
+      description: |-
+        Generate a secret key to represent a given backend component.
+
+        **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: The name of the backend component to generate a key for
+              required:
+                - name
+        description: The arguments to provide in the POST request
   /game_results:
     put:
       summary: Send Game Session Results
@@ -526,6 +565,8 @@ paths:
             application/octet-stream:
               schema:
                 $ref: '#/components/schemas/VTT'
+        '400':
+          $ref: '#/components/responses/Error'
         '404':
           description: Not Found
       operationId: get_vtt
@@ -1202,8 +1243,8 @@ paths:
         - internal
         - qb-pipeline
       responses:
-        '201':
-          description: Created
+        '200':
+          description: OK
           content:
             application/json:
               schema:
@@ -1218,7 +1259,7 @@ paths:
           $ref: '#/components/responses/Error'
       operationId: generate_game_key
       description: |-
-        Generate a secret key to represent the socket server.
+        Alias for `/backend/key` with the "name" argument being "socket".
 
         **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
     parameters: []
