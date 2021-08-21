@@ -270,7 +270,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     @app.route("/audio", methods=["GET", "POST", "PATCH"])
     def audio_resource():
         """
-        GET: Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
+        GET: Get a batch of at most ``UNPROC_FIND_LIMIT`` documents from the UnprocessedAudio collection in the MongoDB
         Atlas.
 
         POST: Submit one or more recordings for pre-screening and upload them to the database if they all pass. The
@@ -331,10 +331,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     def get_unprocessed_audio():
         """
-        Get a batch of at most UNPROC_FIND_LIMIT documents from the UnprocessedAudio collection in the MongoDB
+        Get a batch of at most ``UNPROC_FIND_LIMIT`` documents from the UnprocessedAudio collection in the MongoDB
         Atlas.
 
-        :return: A dictionary containing an array of dictionaries under the key "results".
+        :return: A dictionary containing an array of dictionaries under the key "results"
         """
         max_docs = app.config["UNPROC_FIND_LIMIT"]
         errs = []
@@ -423,14 +423,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                    diarization_metadata_list: List[str] = None) -> Tuple[Union[dict, str], int]:
         """
         Submit one or more recordings for pre-screening and uploading.
-        WARNING: Submitting recordings of different rec_types in the same batch can give unpredictable results.
+        **WARNING: Submitting recordings of different ``rec_types`` in the same batch can give unpredictable results.**
 
         :param recordings: A list of audio files
         :param rec_types: A list of rec_types associated with each recording
         :param user_id: The ID of the submitter
         :param qb_ids: A list of question IDs associated with each recording
         :param sentence_ids: The associated sentence IDs. Only required for segmented questions
-        :param diarization_metadata_list: (optional) The associated parameter sets for diarization.
+        :param diarization_metadata_list: (optional) The associated parameter sets for diarization
         :return: A dictionary with the key "prescreenPointers" and a status code. If an error occurred, a string with a
                  status code is returned instead.
         """
@@ -597,8 +597,15 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
 
     def handle_processing_results(arguments_batch: Dict[str, List[Dict[str, Any]]]):
-        """Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
-        Additionally, update the recording history of the associated questions and users."""
+        """
+        Attach the given arguments to multiple unprocessed audio documents and move them to the Audio collection.
+        Additionally, update the recording history of the associated questions and users.
+
+        :param arguments_batch: A list of documents each containing the fields to update along with the ID of the
+                                document to update
+        :return: The number of update documents received, the number of successful updates, and the errors that
+                 occurred, all in one dictionary
+        """
         arguments_list = arguments_batch.get("arguments")
         if arguments_list is None:
             # return "undefined_arguments", HTTPStatus.BAD_REQUEST
@@ -628,7 +635,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/answer", methods=["GET"])
     def check_answer():
-        """Check if an answer is correct."""
+        """Check if an answer is correct using approximate string matching."""
         qid = request.args.get("qid")
         user_answer = request.args.get("a")
 
@@ -676,21 +683,29 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/audio/<path:blob_path>", methods=["GET"])
     def retrieve_audio_file(blob_path):
-        """Retrieve a file from Firebase Storage."""
+        """
+        Retrieve a file from Firebase Storage. The blob path is usually in the format ``<recType>/<_id>``.
+
+        :param blob_path: The path to a Firebase Cloud Storage object
+        :return: A response containing the bytes of the audio file
+        """
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
 
     @app.post("/socket/key")
     def generate_game_key():
-        """Alias for /backend/key with the "name" argument being "socket".
+        """
+        Alias for ``/backend/key`` with the "name" argument being "socket".
 
-        WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
+        **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
+        """
         return _gen_secret_key("socket")
 
     @app.put("/game_results")
     def handle_game_results():
         """
         Update the database with the results of a game session.
-        Precondition: session_results["questionStats"]["played"] != 0
+
+        Precondition: ``session_results["questionStats"]["played"] != 0``
         """
 
         session_results = request.get_json()
@@ -711,8 +726,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """
         Update the database with the results of a game session with only one category.
 
-        :param session_results:
-        :return:
+        :param session_results: A dictionary containing the "mode", "category", and the update arguments for each user,
+                                under the key "users"
+        :return: A dictionary containing the number of "successful" and "requested" updates
         """
         mode = session_results["mode"]
         category = session_results["category"]
@@ -887,8 +903,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """
         Update the database with the results of a game session with multiple categories.
 
-        :param session_results:
-        :return:
+        :param session_results: A dictionary containing the "mode", "categories", and the update arguments for each
+                                user, under the key "users"
+        :return: A dictionary containing the number of "successful" and "requested" updates
         """
         mode = session_results["mode"]
         categories = session_results["categories"]
@@ -1074,9 +1091,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.post("/backend/key")
     def generate_secret_key():
-        """Generate a secret key to represent a given backend component.
+        """
+        Generate a secret key to represent a given backend component.
 
-        WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost."""
+        **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
+        """
 
         args = request.get_json()
         if args is None:
@@ -1128,7 +1147,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/leaderboard", methods=["GET"])
     def get_leaderboard():
-        """Get the basic profiles of the top `size` players."""
+        """
+        Get the basic profiles of the top ``size`` players.
+
+        :return: A dictionary containing the "results"
+        """
         category = request.args.get("category") or "all"
         arg_size = request.args.get("size")
         size = arg_size or app.config["DEFAULT_LEADERBOARD_SIZE"]
@@ -1179,7 +1202,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/profile", methods=["GET", "POST", "PATCH", "DELETE"])
     def own_profile():
-        """A resource to automatically point to the user's own profile."""
+        """
+        A resource to automatically point to the user's own profile
+
+        GET: Retrieve the profile
+
+        POST: Create a new profile
+
+        PATCH: Modify the profile
+
+        DELETE: Remove the profile
+        """
         decoded = _verify_id_token()
         # decoded = {"uid": "dev"}
         user_id = decoded["uid"]
@@ -1300,7 +1333,15 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/profile/<username>", methods=["GET", "PATCH", "DELETE"])
     def other_profile(username):
-        """Resource for the profile of any user."""
+        """
+        A resource for the profile of any user
+
+        GET: Get the profile
+
+        PATCH: Modify the profile
+
+        DELETE: Remove the profile
+        """
         _debug_variable("username", username)
         other_user_profile = qtpm.users.find_one({"username": username}, {"_id": 1})
         if not other_user_profile:
@@ -1441,7 +1482,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/question/unrec", methods=["GET", "POST"])
     def unrec_question_resource():
-        """Resource for unrecorded questions"""
+        """
+        Resource for unrecorded questions
+
+        GET: Find a random unrecorded question (or multiple) and return the ID and transcript.
+
+        POST: Upload a batch of unrecorded questions.
+        """
         if request.method == "GET":
             difficulty = request.args.get("difficultyType")
             batch_size = request.args.get("batchSize")
@@ -1551,7 +1598,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return render_template("uploadtest.html")
 
     def _get_next_submission_name():
-        """Return a filename safe date-timestamp of the current system time"""
+        """Return a filename safe date-timestamp of the current system time."""
         return str(datetime.now().strftime("%Y.%m.%d_%H.%M.%S.%f"))
 
     def _gen_secret_key(component_name):
@@ -1577,7 +1624,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return {"key": key}
 
     def _save_recording(directory: str, recording: werkzeug.datastructures.FileStorage, metadata: dict):
-        """Write a WAV file and its JSON metadata to disk."""
+        """
+        Write a WAV file and its JSON metadata to disk.
+
+        :param directory: The directory that the file will be located in
+        :param recording: The bytes of the audio file
+        :param metadata: The metadata to save to disk
+        :return: The name of the submission
+        """
         app.logger.info("Saving recording...")
         submission_name = _get_next_submission_name()
         _debug_variable("submission_name", submission_name)
@@ -1593,7 +1647,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return submission_name
 
     def _save_recording_batch(directory: str, submissions: List[Tuple[werkzeug.datastructures.FileStorage, dict]]):
-        """Write a batch of WAV files and their associated JSON metadata to disk."""
+        """
+        Write a batch of WAV files and their associated JSON metadata to disk.
+
+        :param directory: The directory that the file will be located in
+        :param submissions: A tuple each containing the bytes of an audio file and the associated metadata to save
+        :return: The list of submission names generated in the same order as the "submissions" argument, which will each
+                 have a batch number appended
+        """
         app.logger.info("Saving recordings...")
         base_submission_name = _get_next_submission_name()
         _debug_variable("base_submission_name", base_submission_name)
@@ -1618,8 +1679,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return submission_names
 
     def _verify_id_token():
-        """Try to decode the token if provided. If in a production environment, forbid access when the decode fails.
-        This function is only callable in the context of a view function."""
+        """
+        Try to decode the token if provided. If in a production environment, forbid access when the decode fails.
+        This function is only callable in the context of a view function.
+
+        :return: The result of calling firebase_admin.auth.verify_id_token() or a dictionary with a schema similar to
+                 that function's output
+        """
         # return {"uid": app.config["DEV_UID"]}
         app.logger.info("Retrieving ID token from header 'Authorization'...")
         id_token = request.headers.get("Authorization")
@@ -1683,10 +1749,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     def _get_private_data_string(original):
         """
-        Utility function for redacting private data if 'LOG_PRIVATE_DATA' is not True
+        Utility function for redacting private data if ``app.config["LOG_PRIVATE_DATA"]`` is not ``True``
 
         :param original: The original value
-        :return: The original value if "LOG_PRIVATE_DATA" is True, otherwise "[REDACTED]"
+        :return: The original value, or "[REDACTED]"
         """
         if app.config["LOG_PRIVATE_DATA"]:
             return original
@@ -1791,8 +1857,13 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 i += 1
 
     def _get_ps_doc(*, name=None, pointer=None):
-        """Get a pre-screen status document by either name or pointer. Only accepts keyword arguments. Return None if
-        no document is found."""
+        """
+        Get a pre-screen status document by either name or pointer. Only accepts keyword arguments.
+
+        :param name: The submission name to look up the pre-screen status document by
+        :param pointer: The pointer to look up the pre-screen status document by
+        :return: The result of the lookup, or None if no result was found
+        """
         k_name = None
         k_val = None
         if name:
@@ -1813,7 +1884,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     def _make_err_response(msg: str, id_: str, status_code: int, extra: list = None, log_msg=False):
         """
-        Construct a JSON error response with the given parameters. Also log the error message if specified.
+        Construct a JSON error response with the given parameters.
 
         :param msg: The human-readable error message to include
         :param id_: The type of error it is

@@ -113,7 +113,7 @@ class QuizzrTPM:
 
     def add_rec_to_question(self, qid: int, rec_doc: dict, sid: int = None) -> Tuple[str, str]:
         """
-        Append a recording document to the "recordedAudios" field of a question
+        Append a recording document to the ``"recordedAudios"`` field of a question
 
         :param qid: The ID of the question
         :param rec_doc: The recording document to append. Should contain the audio ID and recording type
@@ -150,7 +150,7 @@ class QuizzrTPM:
 
     def add_rec_to_user(self, user_id: str, rec_doc: dict) -> Optional[Tuple[str, str]]:
         """
-        Push one recording document to the "recordedAudios" field of one user.
+        Push one recording document to the ``"recordedAudios"`` field of one user.
 
         :param user_id: The internal ID of a user, defined by the _id field of a profile document
         :param rec_doc: The recording document to append. Should contain the audio ID and recording type
@@ -167,7 +167,7 @@ class QuizzrTPM:
 
     def add_recs_to_users(self, uid2rec_docs: Dict[str, List[dict]]):
         """
-        Push multiple recording documents to the "recordedAudios" field of each user.
+        Push multiple recording documents to the ``"recordedAudios"`` field of each user.
 
         :param uid2rec_docs: A dictionary mapping a user ID to the recording documents to append
         :return: An array of tuples each containing the type of error and the reason
@@ -215,10 +215,10 @@ class QuizzrTPM:
         Find and return the (processed) audio document with the best evaluation, applying a given projection.
 
         :param id_list: The list of IDs to query by
-        :param required_fields: The fields that must be included in the audio document.
-        :param optional_fields: The fields to include if present.
+        :param required_fields: The fields that must be included in the audio document
+        :param optional_fields: The fields to include if present
         :param excluded_fields: The fields to omit
-        :return: The audio document with the best evaluation with the given projection applied.
+        :return: The audio document with the best evaluation with the given projection applied
         """
         query = {"_id": {"$in": id_list}, "version": self.config["VERSION"]}
         if self.audio.count_documents(query) == 0:
@@ -254,7 +254,7 @@ class QuizzrTPM:
         """
         Generator function for getting questions from both collections.
 
-        :param qids: The list of question IDs to search through.
+        :param qids: The list of question IDs to search through
         :param kwargs: Pass in any additional arguments for the find() function.
         :return: A generator that can be iterated through to get each result from UnrecordedQuestions and
                  RecordedQuestions.
@@ -298,8 +298,8 @@ class QuizzrTPM:
                              question_ids: List[int],
                              required_fields: List[str]):
         """
-        Pick a random question from a list of question IDs and find it. Alias for pick_random_questions without a
-        batch_size argument.
+        Pick a random question from a list of question IDs and find it. Alias for ``pick_random_questions`` without a
+        ``batch_size`` argument.
 
         :param collection_name: The name of the collection to retrieve the question from
         :param question_ids: The list of question IDs to select from
@@ -364,56 +364,56 @@ class QuizzrTPM:
 
     # Utility methods for automatically updating the cached ID list.
     def insert_unrec_question(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.insert_one(*args, **kwargs)
         self.unrec_question_ids.append(results.inserted_id)
         return results
 
     def insert_unrec_questions(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.insert_many(*args, **kwargs)
         self.unrec_question_ids += results.inserted_ids
         return results
 
     def delete_unrec_question(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.delete_one(*args, **kwargs)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         return results
 
     def delete_unrec_questions(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.unrec_questions.delete_many(*args, **kwargs)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
         return results
 
     def insert_rec_question(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.insert_one(*args, **kwargs)
         self.rec_question_ids.append(results.inserted_id)
         return results
 
     def insert_rec_questions(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.insert_many(*args, **kwargs)
         self.rec_question_ids += results.inserted_ids
         return results
 
     def delete_rec_question(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.delete_one(*args, **kwargs)
         self.rec_question_ids = self.get_ids(self.rec_questions)
         return results
 
     def delete_rec_questions(self, *args, **kwargs):
-        """DEPRECATED! Wrapper method that updates the cached ID list to reflect the results of the operation."""
+        """**DEPRECATED!** Wrapper method that updates the cached ID list to reflect the results of the operation."""
         results = self.rec_questions.delete_many(*args, **kwargs)
         self.rec_question_ids = self.get_ids(self.rec_questions)
         return results
 
     def upload_many(self, file_paths: List[str], subdir: str) -> Dict[str, str]:
         """
-        Upload multiple audio files to Firebase Cloud Storage, located at <BLOB_ROOT>/<subdir>/.
+        Upload multiple audio files to Firebase Cloud Storage, located at ``<BLOB_ROOT>/<subdir>/``.
 
         :param file_paths: The paths of the files to upload
         :param subdir: The subdirectory to put the files in
@@ -437,7 +437,7 @@ class QuizzrTPM:
 
     def get_blob_path(self, blob_name: str, subdir: str) -> str:
         """
-        Form a path from a base name in the format <BLOB_ROOT>/<subdir>/<blob_name>.
+        Form a path from a base name in the format ``<BLOB_ROOT>/<subdir>/<blob_name>``.
 
         :param blob_name: The base name of the blob
         :param subdir: The directory/ies to put the file in
@@ -538,7 +538,7 @@ class QuizzrTPM:
         operator.
 
         :param difficulty_limits: The upper bound for each difficulty level
-        :param difficulty: The difficulty level to choose.
+        :param difficulty: The difficulty level to choose
         :return: The boundaries as a MongoDB filter operator
         """
         lower_bound = difficulty_limits[difficulty - 1] + 1 if difficulty > 0 else None
@@ -552,7 +552,7 @@ class QuizzrTPM:
 
     def get_profile(self, user_id: str, visibility: str) -> Optional[dict]:
         """
-        Retrieve a User document from the associated MongoDB collection
+        Retrieve a User document from the associated MongoDB collection.
 
         :param user_id: The internal ID of the User document
         :param visibility: How much of the profile to show. Valid values are "basic", "public", and "private"
@@ -564,7 +564,7 @@ class QuizzrTPM:
 
     def create_profile(self, user_id: str, pfp: List[str], username: str):
         """
-        Create a profile stub from the given parameters
+        Create a profile stub from the given parameters.
 
         :param user_id: The internal ID of a user, defined by the _id field of a profile document
         :param pfp: Freeform array for the profile. Potential values can be for color, the types of images to use, etc.
@@ -584,7 +584,7 @@ class QuizzrTPM:
 
     def modify_profile(self, user_id: str, update_args: Dict[str, Any]):
         """
-        Modify a user profile
+        Modify a user profile.
 
         :param user_id: The internal ID of a user, defined by the _id field of a profile document
         :param update_args: The fields to replace and their corresponding values
@@ -597,7 +597,7 @@ class QuizzrTPM:
 
     def delete_profile(self, user_id: str):
         """
-        Delete a user profile
+        Delete a user profile.
 
         :param user_id: The internal ID of a user, defined by the _id field of a profile document
         :return: A pymongo DeleteResult object. See documentation for further details
@@ -606,7 +606,7 @@ class QuizzrTPM:
 
     def get_user_role(self, user_id: str) -> str:
         """
-        Get the permission level of the user associated with the given ID
+        Get the permission level of the user associated with the given ID.
 
         :param user_id: The internal ID of a user, defined by the _id field of a profile document
         :return: The role of the user

@@ -37,6 +37,13 @@ THE SOFTWARE.
 
 
 def get_forced_alignment(speech_file: str, transcript: str) -> gentle.Transcription:
+    """
+    Run a forced alignment using Gentle and return the result as a gentle.Transcription object
+
+    :param speech_file: The audio file
+    :param transcript: The transcript of the speech in the audio file
+    :return: The result as a gentle.Transcription object
+    """
     def on_progress(p):  # align.py stuff
         for k, v in p.items():
             logging.debug("%s: %s" % (k, v))

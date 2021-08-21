@@ -9,7 +9,11 @@ class QuizzrAPISpec:
     STUB = 1
 
     def __init__(self, api_path):
-        """Load an OpenAPI specification from a YAML file."""
+        """
+        Load an OpenAPI specification from a YAML file.
+
+        :param api_path: The path to the file
+        """
         with open(api_path) as api_f:
             self.api = yaml.load(api_f.read(), Loader=yaml.FullLoader)
 
@@ -38,7 +42,7 @@ class QuizzrAPISpec:
         """
         Return a schema from the API specification, optionally with all references resolved.
 
-        :param schema_name: The name of the schema as identified in the specification.
+        :param schema_name: The name of the schema as identified in the specification
         :param resolve_references: If this is True, replace all references with their actual values.
         """
         schema = self.api["components"]["schemas"][schema_name]
@@ -50,10 +54,10 @@ class QuizzrAPISpec:
         """
         Recursively resolve all references in a schema for validation.
 
-        WARNING: Circular references will cause a RecursionError
+        **WARNING: Circular references will cause a RecursionError**
 
         :param in_schema: An openAPI schema with references
-        :return:
+        :return: A deep copy of the input schema with all references resolved
         """
         # TODO: Multiple types
         out_schema = deepcopy(in_schema)
@@ -86,7 +90,7 @@ class QuizzrAPISpec:
         """
         Return the value of the object at the specified path.
 
-        :param path: A slash-delimited string starting with # that defines the path to the schema.
+        :param path: A slash-delimited string starting with # that defines the path to the schema
         :return: The result of the lookup
         """
         if not path.startswith("#/"):
