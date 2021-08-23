@@ -51,6 +51,7 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `DEFAULT_LEADERBOARD_SIZE` The default number of entries on the leaderboard.
 * `MAX_USERNAME_LENGTH` The maximum allowable number of characters in a username.
 * `USERNAME_CHAR_SET` A string containing all allowable characters in a username.
+* `DEFAULT_RATE_LIMITS` The default request rate limits for the server. Set this value to an empty array to disable the rate limiter. See [Flask Limiter](https://flask-limiter.readthedocs.io/en/stable/#) documentation for more details.
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
@@ -93,7 +94,8 @@ The following JSON data shows the default values of each configuration field. Yo
   "MAX_LEADERBOARD_SIZE": 200,
   "DEFAULT_LEADERBOARD_SIZE": 10,
   "MAX_USERNAME_LENGTH": 16,
-  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  "DEFAULT_RATE_LIMITS": []
 }
 ```
 

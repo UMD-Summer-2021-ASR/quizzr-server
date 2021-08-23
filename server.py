@@ -19,6 +19,8 @@ import jsonschema.exceptions
 import pymongo.errors
 import werkzeug.datastructures
 from firebase_admin import auth
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from fuzzywuzzy import fuzz
 
 import bson.json_util
@@ -112,9 +114,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "USE_ID_TOKENS": True,
         "MAX_LEADERBOARD_SIZE": 200,
         "DEFAULT_LEADERBOARD_SIZE": 10,
-        # "QW_SHUTDOWN_INTERVAL_THRESHOLD": 1,
         "MAX_USERNAME_LENGTH": 16,
-        "USERNAME_CHAR_SET": string.ascii_letters + string.digits
+        "USERNAME_CHAR_SET": string.ascii_letters + string.digits,
+        "DEFAULT_RATE_LIMITS": []
     }
 
     config_dir = os.path.join(app.instance_path, "config")
@@ -260,9 +262,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app_attributes["qwPid"] = qw_process.pid
     app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
     app.logger.info("Started pre-screening program")
+
+    rate_limits = app.config["DEFAULT_RATE_LIMITS"]
+    if rate_limits:
+        app.logger.info("Initializing rate limiter...")
+        limiter = Limiter(app, key_func=get_remote_address, default_limits=rate_limits)
+        app.logger.info("Finished initializing rate limiter")
+    else:
+        app.logger.info("No default rate limits defined. Skipping rate limiter initialization")
+
     secret_keys = {}
     prescreen_statuses = []
-
     pprinter = pprint.PrettyPrinter()
 
     app.logger.info("Completed initialization")
