@@ -301,17 +301,26 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             sentence_ids = request.form.getlist("sentenceId")
             diarization_metadata_list = request.form.getlist("diarMetadata")
             rec_types = request.form.getlist("recType")
+            expected_answers = request.form.getlist("expectedAnswer")
+            transcripts = request.form.getlist("transcript")
+            correct_flags = request.form.getlist("correct")
 
             _debug_variable("recordings", recordings)
             _debug_variable("qb_ids", qb_ids)
             _debug_variable("sentence_ids", sentence_ids)
             _debug_variable("diarization_metadata_list", diarization_metadata_list)
             _debug_variable("rec_types", rec_types)
+            _debug_variable("expected_answers", expected_answers)
+            _debug_variable("transcripts", transcripts)
+            _debug_variable("correct_flags", correct_flags)
 
             if not (len(recordings) == len(rec_types)
                     and (not qb_ids or len(recordings) == len(qb_ids))
                     and (not sentence_ids or len(recordings) == len(sentence_ids))
-                    and (not diarization_metadata_list or len(recordings) == len(diarization_metadata_list))):
+                    and (not diarization_metadata_list or len(recordings) == len(diarization_metadata_list))
+                    and (not expected_answers or len(recordings) == len(expected_answers))
+                    and (not transcripts or len(recordings) == len(transcripts))
+                    and (not correct_flags or len(recordings) == len(correct_flags))):
                 # app.logger.error("Received incomplete form batch. Aborting")
                 # return "incomplete_batch", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
@@ -334,7 +343,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             #     if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
             #         return result
             # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
-            return pre_screen(recordings, rec_types, user_id, qb_ids, sentence_ids, diarization_metadata_list)
+            return pre_screen(recordings, rec_types, user_id, qb_ids, sentence_ids, diarization_metadata_list,
+                              expected_answers, transcripts, correct_flags)
         elif request.method == "PATCH":
             arguments_batch = request.get_json()
             return handle_processing_results(arguments_batch)
@@ -430,17 +440,24 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                    user_id: str,
                    qb_ids: List[Union[int, str]] = None,
                    sentence_ids: List[Union[int, str]] = None,
-                   diarization_metadata_list: List[str] = None) -> Tuple[Union[dict, str], int]:
+                   diarization_metadata_list: List[str] = None,
+                   expected_answers: List[str] = None,
+                   transcripts: List[str] = None,
+                   correct_flags: List[str] = None) -> Tuple[Union[dict, str], int]:
         """
         Submit one or more recordings for pre-screening and uploading.
-        **WARNING: Submitting recordings of different ``rec_types`` in the same batch can give unpredictable results.**
+
+        WARNING: Submitting recordings of different ``rec_types`` in the same batch can give unpredictable results.
 
         :param recordings: A list of audio files
         :param rec_types: A list of rec_types associated with each recording
         :param user_id: The ID of the submitter
-        :param qb_ids: A list of question IDs associated with each recording
-        :param sentence_ids: The associated sentence IDs. Only required for segmented questions
+        :param qb_ids: (optional) A list of question IDs associated with each recording
+        :param sentence_ids: (optional) The associated sentence IDs. Only required for segmented questions
         :param diarization_metadata_list: (optional) The associated parameter sets for diarization
+        :param expected_answers: (optional) A list of the associated expected answers (for "answer" recordings)
+        :param transcripts: (optional) A list of the associated output transcripts (for "answer" recordings)
+        :param correct_flags: (optional) Whether each "answer" recording contains the correct answer
         :return: A dictionary with the key "prescreenPointers" and a status code. If an error occurred, a string with a
                  status code is returned instead.
         """
@@ -455,11 +472,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             qb_id = qb_ids[i] if len(qb_ids) > i else None
             sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
             diarization_metadata = diarization_metadata_list[i] if len(diarization_metadata_list) > i else None
+            expected_answer = expected_answers[i] if len(expected_answers) > i else None
+            transcript = transcripts[i] if len(transcripts) > i else None
+            correct = correct_flags[i] if len(correct_flags) > i else None
 
             _debug_variable("qb_id", qb_id)
             _debug_variable("sentence_id", sentence_id)
             _debug_variable("diarization_metadata", diarization_metadata)
             _debug_variable("rec_type", rec_type)
+            _debug_variable("expected_answer", expected_answer)
+            _debug_variable("transcript", transcript)
+            _debug_variable("correct", correct)
 
             if not recording:
                 # app.logger.error("No audio recording defined. Aborting")
@@ -493,7 +516,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                     True
                 )
 
-            qid_required = rec_type != "buzz"
+            qid_required = rec_type not in ["buzz", "answer"]
             if qid_required and not qb_id:
                 # app.logger.error("Form argument 'qid' expected. Aborting")
                 # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
@@ -520,6 +543,12 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             elif rec_type == "normal" and len(recordings) > 1:
                 app.logger.debug("Field 'sentenceId' not specified in batch submission")
                 metadata["tokenizationId"] = i
+            if expected_answer:
+                metadata["expectedAnswer"] = expected_answer
+            if transcript:
+                metadata["transcript"] = transcript
+            if correct:
+                metadata["correct"] = correct.lower() == "true"
 
             submissions.append((recording, metadata))
 
