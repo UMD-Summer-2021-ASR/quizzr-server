@@ -621,7 +621,8 @@ class QuizzrProcessor:
             unk = self.config["checkUnk"] and word_data.alignedWord == self.config["unkToken"]
             if word_data.case == "success" and not unk:
                 aligned_words += 1
-        vtt = vtt_conversion.gentle_alignment_to_vtt(words)
+        realigned_alignment = vtt_conversion.realign_alignment(alignment)
+        vtt = vtt_conversion.gentle_alignment_to_vtt(realigned_alignment.words)
 
         return aligned_words, total_words, vtt
 
