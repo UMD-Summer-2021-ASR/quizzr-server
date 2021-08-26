@@ -5,11 +5,12 @@ from typing import Tuple, Iterable
 from gentle import transcription
 
 
-def aligned_word_to_vtt_cue(word_entry: gentle.transcription.Word):
+def aligned_word_to_vtt_cue(word_entry: transcription.Word, speaker_name="Speaker 0"):
     """
     Convert a Gentle Word object into a VTT cue.
 
     :param word_entry: A Gentle Word object
+    :param speaker_name: (optional) The name of the speaker to display
     :return: A VTT cue including a timestamp and the word aligned
     """
     to_symbol = " --> "
@@ -19,20 +20,21 @@ def aligned_word_to_vtt_cue(word_entry: gentle.transcription.Word):
     start_stamp = seconds_to_isoformat(word_entry.start)
     end_stamp = seconds_to_isoformat(word_entry.end)
     timestamp_header = to_symbol.join([start_stamp, end_stamp])
-    speaker_name = "Speaker X"
     speaker_tag = f"<v {speaker_name}>"
-    caption = speaker_tag + word_entry.word.upper()
+    caption = speaker_tag + word_entry.word
     return "\n".join([timestamp_header, caption])
 
 
-def gentle_alignment_to_vtt(words: Iterable[gentle.transcription.Word]) -> str:
+def gentle_alignment_to_vtt(words: Iterable[transcription.Word],
+                            header="WEBVTT Kind: captions; Language: en") -> str:
     """
     Convert a series of Gentle Word objects into a VTT string.
 
     :param words: Any kind of iterable that contains Gentle Word objects
+    :param header: (optional) The string to use at the top of the VTT file
     :return: A VTT-converted forced alignment
     """
-    vtt = "WEBVTT Kind: captions; Language: en"
+    vtt = header
     gap = "\n\n"
     for word_entry in words:
         vtt_cue = aligned_word_to_vtt_cue(word_entry)

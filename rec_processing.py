@@ -610,7 +610,7 @@ class QuizzrProcessor:
 
         :param file_path: The path to the WAV file
         :param r_transcript: The transcript to use as a reference
-        :return: A tuple containing the accuracy and the VTT or None, None if a RuntimeError occurred.
+        :return: A tuple containing the accuracy and the VTT
         """
         alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         words = alignment.words
@@ -619,7 +619,7 @@ class QuizzrProcessor:
         aligned_words = 0
         for word_data in words:
             unk = self.config["checkUnk"] and word_data.alignedWord == self.config["unkToken"]
-            if word_data.case == "success" and not unk:
+            if word_data.success() and not unk:
                 aligned_words += 1
         realigned_alignment = vtt_conversion.realign_alignment(alignment)
         vtt = vtt_conversion.gentle_alignment_to_vtt(realigned_alignment.words)

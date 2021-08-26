@@ -40,7 +40,7 @@ def get_forced_alignment(speech_file: str, transcript: str) -> gentle.Transcript
     """
     Run a forced alignment using Gentle and return the result as a gentle.Transcription object
 
-    :param speech_file: The audio file
+    :param speech_file: The path to the audio file
     :param transcript: The transcript of the speech in the audio file
     :return: The result as a gentle.Transcription object
     """
