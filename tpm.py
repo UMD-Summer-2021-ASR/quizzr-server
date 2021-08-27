@@ -54,6 +54,7 @@ class QuizzrTPM:
         self.unrec_questions: Collection = self.database.UnrecordedQuestions
         self.audio: Collection = self.database.Audio
         self.unproc_audio: Collection = self.database.UnprocessedAudio
+        self.games: Collection = self.database.Games
 
         self.rec_question_ids = self.get_ids(self.rec_questions)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
