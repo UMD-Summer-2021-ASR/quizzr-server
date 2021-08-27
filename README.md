@@ -133,4 +133,4 @@ Notes:
 * You will need to have the private Firebase key in the mounting directory (see [Installation](#Installation)).
 
 ## Endpoints
-All documentation for the endpoints has been moved to [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.
+All documentation for the endpoints is in [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.

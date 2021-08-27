@@ -176,7 +176,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app.logger.info(f"MongoDB Database Name = '{app_conf['DATABASE']}'")
     app.logger.info(f"Firebase Blob Root = '{app_conf['BLOB_ROOT']}'")
     app.logger.info(f"Environment set to '{app_conf['Q_ENV']}'")
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, api, os.path.join(secret_dir, "firebase_storage_key.json"),
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, os.path.join(secret_dir, "firebase_storage_key.json"),
                      app.logger.getChild("qtpm"))
     app.logger.info("Initialized third-party services")
 
@@ -199,7 +199,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "db_name": app_conf["DATABASE"],
         "tpm_config": app_conf,
         "firebase_app_specifier": qtpm.app,
-        "api": api,
         "rec_dir": rec_dir,
         "queue_dir": queue_dir,
         "error_dir": error_dir,

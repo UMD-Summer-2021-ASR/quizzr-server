@@ -16,7 +16,6 @@ from pymongo.database import Database
 
 import forced_alignment
 import vtt_conversion
-from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
 
 # logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
@@ -334,7 +333,10 @@ class QuizzrProcessor:
         :return: A dictionary mapping submissions to results, which contain either an "accuracy" and "vtt" key or an
                  "err" key.
         """
-        # TODO: Make into batches if possible.
+        # TODO: Make pre-screening of multiple submissions happen in parallel / asynchronously.
+        #   Parallel = multiprocessing.Pool
+        #   Asynchronous = asyncio
+        # TODO: Add timeout as a workaround to forced alignments sometimes blocking indefinitely.
         self.logger.info(f"Evaluating {len(submissions)} submission(s)...")
 
         num_finished_submissions = 0
@@ -527,6 +529,8 @@ class QuizzrProcessor:
                     self.logger.error(f"Error encountered with submission '{submission}'. Skipping")
                     results.append((submission, result))
                     continue
+
+                # noinspection PyUnresolvedReferences
                 accuracy = result["accuracyFraction"][0] / result["accuracyFraction"][1]
                 results.append((submission, {"accuracy": accuracy, "vtt": result["vtt"]}))
 
@@ -801,27 +805,28 @@ def delete_submission(directory: str, submission_name: str, file_types: List[str
             os.remove(file_path)
 
 
-def start_watcher(db_name, tpm_config, firebase_app_specifier, api, rec_dir, queue_dir, error_dir, proc_config, queue,
-                  submission_file_types=None, logger=None):
+def start_watcher(db_name, tpm_config, firebase_app_specifier, rec_dir, proc_config, queue, queue_dir=None,
+                  error_dir=None, submission_file_types=None, logger=None):
     """
     Initialize and run the main loop of a QuizzrWatcher
 
     :param db_name: See QuizzrTPM.__init__() for more details
     :param tpm_config: See QuizzrTPM.__init__() for more details
     :param firebase_app_specifier: See QuizzrTPM.__init__() for more details
-    :param api: See QuizzrTPM.__init__() for more details
     :param rec_dir: See QuizzrProcessorHead.__init__() for more details
-    :param queue_dir: See QuizzrWatcher.__init__() for more details
-    :param error_dir: See QuizzrWatcher.__init__() for more details
     :param proc_config: See QuizzrProcessorHead.__init__() for more details
     :param queue: See QuizzrWatcher.__init__() for more details
-    :param submission_file_types: The possible file extensions of a submission (do not start with a dot)
+    :param queue_dir: (optional) See QuizzrWatcher.__init__() for more details
+    :param error_dir: (optional) See QuizzrWatcher.__init__() for more details
+    :param submission_file_types: (optional) The possible file extensions of a submission (do not start with a dot)
     :param logger: (optional) An instance of the logging.Logger class
     """
     logger = logger or logging.getLogger(__name__)
+    queue_dir = queue_dir or os.path.join(rec_dir, "queue")
+    error_dir = error_dir or os.path.join(rec_dir, "_error")
     logger.info("Initializing...")
     logger.debug("Instantiating QuizzrProcessorHead...")
-    qtpm = QuizzrTPM(db_name, tpm_config, api, firebase_app_specifier, logger.getChild("qtpm"))
+    qtpm = QuizzrTPM(db_name, tpm_config, firebase_app_specifier, logger.getChild("qtpm"))
     qph = QuizzrProcessorHead(qtpm, rec_dir, proc_config, submission_file_types, logger.getChild("qp"))
     logger.debug("Finished instantiating QuizzrProcessorHead")
     logger.debug("Instantiating QuizzrWatcher...")
@@ -838,10 +843,9 @@ def main():
     rec_dir = os.path.expanduser("~/quizzr_server/storage/queue")
     qtpm = QuizzrTPM(database, {
         "BLOB_ROOT": "development",
-        "VERSION": "mfa_branch",
+        "VERSION": "0.2.0",
         "BLOB_NAME_LENGTH": 32
-    }, QuizzrAPISpec(os.path.expanduser("~/PycharmProjects/quizzr-server/reference/backend.yaml")),
-                     os.environ["SECRET_DIR"])
+    }, os.environ["SECRET_DIR"])
     qph = QuizzrProcessorHead(qtpm, rec_dir, {
             "checkUnk": True,
             "unkToken": "<unk>",
