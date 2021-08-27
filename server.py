@@ -176,7 +176,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     app.logger.info(f"MongoDB Database Name = '{app_conf['DATABASE']}'")
     app.logger.info(f"Firebase Blob Root = '{app_conf['BLOB_ROOT']}'")
     app.logger.info(f"Environment set to '{app_conf['Q_ENV']}'")
-    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, api, os.path.join(secret_dir, "firebase_storage_key.json"),
+    qtpm = QuizzrTPM(app_conf["DATABASE"], app_conf, os.path.join(secret_dir, "firebase_storage_key.json"),
                      app.logger.getChild("qtpm"))
     app.logger.info("Initialized third-party services")
 
@@ -199,7 +199,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "db_name": app_conf["DATABASE"],
         "tpm_config": app_conf,
         "firebase_app_specifier": qtpm.app,
-        "api": api,
         "rec_dir": rec_dir,
         "queue_dir": queue_dir,
         "error_dir": error_dir,
@@ -678,7 +677,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         qid = request.args.get("qid")
         user_answer = request.args.get("a")
 
-        if not qid:
+        if qid is None or qid == '':
             # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
             return _make_err_response(
                 "Query parameter 'qid' is undefined",
@@ -720,6 +719,40 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         _debug_variable("answer_similarity", answer_similarity)
         return {"correct": answer_similarity >= app.config["MIN_ANSWER_SIMILARITY"]}
 
+    @app.route("/answer_full/<int:qid>", methods=["GET"])
+    def get_answer(qid):
+        """Get the answer of a question. This is intended for use by a backend component."""
+        # if qid is None:
+        #     # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
+        #     return _make_err_response(
+        #         "Path parameter is undefined",
+        #         "undefined_arg",
+        #         HTTPStatus.BAD_REQUEST,
+        #         ["path"],
+        #         True
+        #     )
+
+        question = qtpm.rec_questions.find_one({"qb_id": qid})
+        if not question:
+            # return "question_not_found", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "Could not find question",
+                "question_not_found",
+                HTTPStatus.NOT_FOUND,
+                log_msg=True
+            )
+        correct_answer = question.get("answer")
+        if not correct_answer:
+            # return "answer_not_found", HTTPStatus.NOT_FOUND
+            return _make_err_response(
+                "Question does not contain field 'answer'",
+                "answer_not_found",
+                HTTPStatus.NOT_FOUND,
+                log_msg=True
+            )
+
+        return {"answer": correct_answer}
+
     @app.route("/audio/<path:blob_path>", methods=["GET"])
     def retrieve_audio_file(blob_path):
         """
@@ -760,6 +793,79 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             ["category_or_categories"],
             True
         )
+
+    # @app.route("/game", methods=["GET", "POST"])
+    # def game_resource():
+    #     """Resource for sharing game sessions"""
+    #     if request.method == "GET":
+    #         return get_game()
+    #     elif request.method == "POST":
+    #         return post_game()
+
+    @app.get("/game/<game_id>")
+    def get_game(game_id):
+        """Get a game session from MongoDB."""
+        if not game_id:
+            return _make_err_response(
+                "Path parameter not defined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["path"],
+                True
+            )
+
+        session = qtpm.games.find_one({"_id": game_id})
+        if session is None:
+            return _make_err_response(
+                f"Game session with ID '{game_id}' not found",
+                "resource_not_found",
+                HTTPStatus.NOT_FOUND,
+                [game_id],
+                True
+            )
+
+        return session
+
+    @app.post("/game")
+    def post_game():
+        """Upload a game session to MongoDB for users to share."""
+        arguments = request.get_json()
+
+        game_id = arguments.get("id")
+        session = arguments.get("session")
+
+        if not game_id:
+            return _make_err_response(
+                "Argument 'id' not defined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["id"],
+                True
+            )
+
+        if not session:
+            return _make_err_response(
+                "Argument 'session' not defined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["session"],
+                True
+            )
+
+        session["_id"] = game_id
+
+        try:
+            qtpm.games.insert_one(session)
+        except pymongo.errors.DuplicateKeyError:
+            return _make_err_response(
+                f"ID for game session {game_id} already occupied",
+                "id_taken",
+                HTTPStatus.BAD_REQUEST,
+                [game_id],
+                True
+            )
+
+        return '', HTTPStatus.CREATED
 
     def handle_game_results_category(session_results):
         """

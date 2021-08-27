@@ -16,7 +16,6 @@ import firebase_admin
 from firebase_admin import credentials, storage
 from pymongo.results import InsertManyResult
 
-from sv_api import QuizzrAPISpec
 from sv_errors import UsernameTakenError, ProfileNotFoundError, MalformedProfileError
 
 
@@ -26,21 +25,18 @@ class QuizzrTPM:
 
     G_PATH_DELIMITER = "/"
 
-    def __init__(self, database_name: str, config: dict, api: QuizzrAPISpec,
+    def __init__(self, database_name: str, config: dict,
                  firebase_app_specifier: Union[str, firebase_admin.App], logger=None):
         """
         Create a MongoClient and initialize a Firebase app, or use an existing one if provided.
 
         :param database_name: The name of the MongoDB database to use
         :param config: The configuration to use
-        :param api: An instance of QuizzrAPISpec containing the OpenAPI specification
         :param firebase_app_specifier: A string specifying the path to the service account key or a Firebase app
         """
         # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
         self.logger = logger or logging.getLogger(__name__)
         self.config = config
-
-        self.api = api
 
         self.mongodb_client = pymongo.MongoClient(os.environ["CONNECTION_STRING"])
         if type(firebase_app_specifier) is str:
@@ -58,6 +54,7 @@ class QuizzrTPM:
         self.unrec_questions: Collection = self.database.UnrecordedQuestions
         self.audio: Collection = self.database.Audio
         self.unproc_audio: Collection = self.database.UnprocessedAudio
+        self.games: Collection = self.database.Games
 
         self.rec_question_ids = self.get_ids(self.rec_questions)
         self.unrec_question_ids = self.get_ids(self.unrec_questions)
@@ -575,12 +572,22 @@ class QuizzrTPM:
         """
         if self.users.find_one({"username": username}) is not None:
             raise UsernameTakenError(username)
-        profile_stub = self.api.get_schema_stub("User")
-        profile_stub["_id"] = user_id
-        profile_stub["pfp"] = pfp
-        profile_stub["username"] = username
-        profile_stub["creationDate"] = datetime.now().isoformat()
-        return self.users.insert_one(profile_stub)
+        profile = {
+            "_id": user_id,
+            "pfp": pfp,
+            "username": username,
+            "usernameSpecs": '',
+            "ratings": {},
+            "totalQuestionsPlayed": 0,
+            "totalGames": 0,
+            "coins": 0,
+            "coinsCumulative": 0,
+            "activityOverview": [],
+            "recordedAudios": [],
+            "permLevel": "normal",
+            "playTime": 0,
+            "creationDate": datetime.now().isoformat()}
+        return self.users.insert_one(profile)
 
     def modify_profile(self, user_id: str, update_args: Dict[str, Any]):
         """
