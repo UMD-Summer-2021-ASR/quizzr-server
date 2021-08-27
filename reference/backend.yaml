@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.7.5
+  version: 0.8.1
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -52,6 +52,37 @@ paths:
       description: Check if the user's answer approximately matches the stored answer of the associated question.
       security:
         - Firebase-Auth: []
+  '/answer_full/{qid}':
+    get:
+      summary: Get Answer
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                required:
+                  - answer
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+      operationId: get_answer
+      description: Retrieve an answer to a question.
+    parameters:
+      - schema:
+          type: integer
+        name: qid
+        in: path
+        required: true
+        description: The `qb_id` of a question
   /audio:
     get:
       summary: Get Unprocessed Audio Batch
@@ -377,6 +408,58 @@ paths:
               required:
                 - name
         description: The arguments to provide in the POST request
+  /game:
+    post:
+      summary: Upload Game
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '201':
+          description: Created
+        '400':
+          $ref: '#/components/responses/Error'
+      operationId: post_game
+      description: Upload a game session to MongoDB.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                session:
+                  $ref: '#/components/schemas/Game-Session'
+              required:
+                - id
+                - session
+        description: The game session to put into the collection along with the ID
+  '/game/{game_id}':
+    parameters:
+      - schema:
+          type: string
+        name: game_id
+        in: path
+        required: true
+    get:
+      summary: Get Game Session
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Game-Session'
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+      description: Get a game session from MongoDB.
+      operationId: get_game
   /game_results:
     put:
       summary: Send Game Session Results
@@ -1384,6 +1467,10 @@ components:
       properties:
         <category>:
           type: number
+    Game-Session:
+      title: Game-Session
+      type: object
+      description: A game session
     Game-Stats:
       title: Game-Stats
       type: object
