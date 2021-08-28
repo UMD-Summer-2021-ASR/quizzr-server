@@ -9,7 +9,7 @@ RUN apt-get update \
         # nvidia-cuda-dev \
         ffmpeg \
         unzip \
-    && git clone https://github.com/UMD-Summer-2021-ASR/gentle.git \
+    && git clone https://github.com/lowerquality/gentle.git \
     && pip install incremental \
     && cd gentle && ./install.sh
 WORKDIR /quizzr-src

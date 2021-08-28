@@ -36,7 +36,7 @@ from sv_api import QuizzrAPISpec
 from tpm import QuizzrTPM
 from sv_errors import UsernameTakenError, ProfileNotFoundError, MalformedProfileError
 
-logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
+logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "INFO")
 
 DEV_ENV_NAME = "development"
 PROD_ENV_NAME = "production"

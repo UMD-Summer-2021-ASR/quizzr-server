@@ -1,14 +1,14 @@
 # Quizzr.io Data Flow Server
 
 ## Overview
-The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
+The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.6, 3.7, and 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
 
 ## Prerequisites
 Prior to installing the server, either through Docker (see [Using Docker](#Using-Docker)) or directly onto your machine, make sure you have addressed the following prerequisites:
-* Python 3.8 with `pip` installed (does not apply with Docker).
+* Python 3.6, 3.7, or 3.8 with `pip` installed (does not apply with Docker).
 * A MongoDB Atlas with the following (see [Get Started with Atlas](https://docs.atlas.mongodb.com/getting-started/), parts 1-5, for more information):
   * An Atlas account; 
-  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "RecordedQuestions", "UnrecordedQuestions", and "Users" collections, all of which are not capped;
+  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "Games", "RecordedQuestions", "UnrecordedQuestions", and "Users" collections, all of which are not capped;
   * A database user with permission to read and write to all collections in the database; and
   * A connection through the database user with a Python driver version 3.6 or later.
 * A Firebase project with the Cloud Storage service enabled and a connection to the project through an Admin SDK set up (see [Cloud Storage for Firebase](https://firebase.google.com/docs/storage/#implementation_path) and [Add the Firebase Admin SDK to your server](https://firebase.google.com/docs/admin/setup) respectively for more information).
@@ -53,7 +53,15 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `USERNAME_CHAR_SET` A string containing all allowable characters in a username.
 * `DEFAULT_RATE_LIMITS` The default request rate limits for the server. Set this value to an empty array to disable the rate limiter. See [Flask Limiter](https://flask-limiter.readthedocs.io/en/stable/#) documentation for more details.
 
-It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
+It is also possible to override configuration fields through a set of overrides passed into the `test_overrides` argument for the app factory function.
+
+### Environment Variables
+
+There are also several environment variables that are not in the config file. The following describes each environment variable:
+* `QUIZZR_LOG` The minimum log level to filter messages by. Valid log levels are, from least to greatest, `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`. Default is `INFO`.
+* `Q_INST_PATH` The root directory for configurations, secrets, and storage. Default is `~/quizzr_server`.
+* `Q_STG_ROOT` The root directory to use for storage. Default is `$Q_INST_PATH/storage`.
+* `Q_CONFIG_NAME` The name of the config file to use. Default is `sv_config.json`.
 
 ### Configuration Defaults
 The following JSON data shows the default values of each configuration field. You may also view the default configuration in `server.py`.
