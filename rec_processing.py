@@ -18,7 +18,6 @@ import forced_alignment
 import vtt_conversion
 from tpm import QuizzrTPM
 
-# logging.basicConfig(level=os.environ.get("QUIZZR_LOG") or "DEBUG")
 
 BATCH_SUBMISSION_REGEX = re.compile(r"(.+)b\d$")
 PUNC_REGEX = re.compile(r"[.?!,;:\"\-]")
@@ -175,7 +174,6 @@ class QuizzrProcessorHead:
 
         self.logger.debug(f"file2blob = {file2blob!r}")
 
-        # sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         sub2meta = {}
         sub2vtt = {}
 
@@ -224,7 +222,6 @@ class QuizzrProcessor:
         self.submission_file_types = submission_file_types or ["wav", "json"]
         self.config = config
         self.DIRECTORY = directory
-        # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
 
         self.users = database.Users
         self.rec_questions = database.RecordedQuestions
@@ -286,8 +283,6 @@ class QuizzrProcessor:
                             "accuracy": result["accuracy"],
                             "metadata": sub2meta[submission]
                         }
-                        # self.logger.info(f"Removing submission with name '{submission}'")
-                        # delete_submission(self.DIRECTORY, submission, self.submission_file_types)
                     else:
                         final_results[submission] = {
                             "case": "accepted",
@@ -340,157 +335,8 @@ class QuizzrProcessor:
         self.logger.info(f"Evaluating {len(submissions)} submission(s)...")
 
         num_finished_submissions = 0
-        # results = {}
-        # for submission in submissions:
-        #     results[submission] = {}
-        #     file_path = os.path.join(self.DIRECTORY, submission)
-        #     wav_file_path = file_path + ".wav"
-        #     # json_file_path = file_path + ".json"
-        #     if submission not in sub2meta:
-        #         self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
-        #         results[submission]["err"] = "meta_not_found"
-        #         continue
-        #     metadata = sub2meta[submission]
-        #     qid = metadata.get("qb_id")
-        #     self.logger.debug(f"{type(qid)} qid = {qid!r}")
-        #
-        #     if qid is None:
-        #         self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
-        #         results[submission]["err"] = "qid_not_found"
-        #         continue
-        #
-        #     query = {"qb_id": qid}
-        #
-        #     sid = metadata.get("sentenceId")
-        #     self.logger.debug(f"{type(sid)} sid = {sid!r}")
-        #     if sid is None:
-        #         self.logger.debug(f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
-        #         # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
-        #         # results[submission]["err"] = "sid_not_found"
-        #         # continue
-        #     else:
-        #         query["sentenceId"] = sid
-        #
-        #     self.logger.debug("Finding question in UnrecordedQuestions...")
-        #     question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
-        #     if question is None:
-        #         self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
-        #         question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
-        #
-        #     if question is None:
-        #         self.logger.error("Question not found. Skipping submission")
-        #         results[submission]["err"] = "sentence_not_found"
-        #         continue
-        #
-        #     r_transcript = question.get("transcript")
-        #     self.logger.debug(f"r_transcript = {r_transcript!r}")
-        #
-        #     if r_transcript is None:
-        #         self.logger.error("Transcript not found. Skipping submission")
-        #         results[submission]["err"] = "transcript_not_found"
-        #         continue
-        #
-        #     # tokenizationId is only included if no sentenceId is specified and the submission is part of a batch.
-        #     if "tokenizationId" in metadata:
-        #         self.logger.info("Attempting transcript segmentation...")
-        #         if "tokenizations" in question:
-        #             slice_start, slice_end = question["tokenizations"][metadata["tokenizationId"]]
-        #             r_transcript = r_transcript[slice_start:slice_end]
-        #         else:
-        #             self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
-        #
-        #     self.logger.debug(f"r_transcript = {r_transcript!r}")
-        #
-        #     aligned_words, num_words, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
-        #     accuracy = aligned_words / num_words
-        #     if accuracy is None:
-        #         results[submission]["err"] = "runtime_error"
-        #         continue
-        #     # accuracy = self.ACCURACY_CUTOFF
-        #     # accuracy = random.random()
-        #
-        #     results[submission]["accuracy"] = accuracy
-        #     results[submission]["vtt"] = vtt
-        #
-        #     num_finished_submissions += 1
-        #
-        #     self.logger.info(f"Evaluated {num_finished_submissions}/{len(submissions)} submissions")
-        #     self.logger.debug(f"Alignment for '{submission}' has accuracy {accuracy}")
         results = []
         for submission in submissions:
-            # file_path = os.path.join(self.DIRECTORY, submission)
-            # wav_file_path = file_path + ".wav"
-            # json_file_path = file_path + ".json"
-            # if submission not in sub2meta:
-            #     self.logger.error(f"Metadata for submission '{submission}' not found. Skipping")
-            #     results.append((submission, {"err": "metadata_not_found"}))
-            #     continue
-            # metadata = sub2meta[submission]
-            # qid = metadata.get("qb_id")
-            # self.logger.debug(f"{type(qid)} qid = {qid!r}")
-            #
-            # if qid is None:
-            #     self.logger.error(f"Question ID for submission '{submission}' not found. Skipping")
-            #     results.append((submission, {"err": "qid_not_found"}))
-            #     continue
-            #
-            # query = {"qb_id": qid}
-            #
-            # sid = metadata.get("sentenceId")
-            # self.logger.debug(f"{type(sid)} sid = {sid!r}")
-            # if sid is None:
-            #     self.logger.debug(
-            #         f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
-            #     # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
-            #     # results[submission]["err"] = "sid_not_found"
-            #     # continue
-            # else:
-            #     query["sentenceId"] = sid
-            #
-            # self.logger.debug("Finding question in UnrecordedQuestions...")
-            # question = self.unrec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
-            # if question is None:
-            #     self.logger.debug("Question not found in UnrecordedQuestions. Searching in RecordedQuestions...")
-            #     question = self.rec_questions.find_one(query, {"transcript": 1, "tokenizations": 1})
-            #
-            # if question is None:
-            #     self.logger.error("Question not found. Skipping submission")
-            #     results.append((submission, {"err": "sentence_not_found"}))
-            #     continue
-            #
-            # r_transcript = question.get("transcript")
-            # self.logger.debug(f"r_transcript = {r_transcript!r}")
-            #
-            # if r_transcript is None:
-            #     self.logger.error("Transcript not found. Skipping submission")
-            #     results.append((submission, {"err": "transcript_not_found"}))
-            #     continue
-            #
-            # # tokenizationId is only included if no sentenceId is specified and the submission is part of a batch.
-            # if "tokenizationId" in metadata:
-            #     self.logger.info("Attempting transcript segmentation...")
-            #     if "tokenizations" in question:
-            #         slice_start, slice_end = question["tokenizations"][metadata["tokenizationId"]]
-            #         r_transcript = r_transcript[slice_start:slice_end]
-            #     else:
-            #         self.logger.info("Could not segment transcript. Submission may not pass pre-screen")
-            #
-            # self.logger.debug(f"r_transcript = {r_transcript!r}")
-            #
-            # try:
-            #     aligned_words, num_words, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
-            # except RuntimeError as e:
-            #     self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
-            #     results.append((submission, {"err": "runtime_error", "extra": str(e)}))
-            #     continue
-            # accuracy = aligned_words / num_words
-            # # if accuracy is None:
-            # #     results[submission]["err"] = "runtime_error"
-            # #     continue
-            # # accuracy = self.ACCURACY_CUTOFF
-            # # accuracy = random.random()
-            #
-            # results.append((submission, {"accuracy": accuracy, "vtt": vtt}))
             if type(submission) is list:
                 total_accuracy_fraction = [0, 0]
                 vtt_list = []
@@ -565,9 +411,6 @@ class QuizzrProcessor:
         if sid is None:
             self.logger.debug(
                 f"Sentence ID for submission '{submission}' not found. Continuing without sentence ID")
-            # self.logger.error(f"Sentence ID for submission {submission} not found. Skipping")
-            # results[submission]["err"] = "sid_not_found"
-            # continue
         else:
             query["sentenceId"] = sid
 
@@ -618,7 +461,6 @@ class QuizzrProcessor:
         """
         alignment = forced_alignment.get_forced_alignment(file_path, r_transcript)
         words = alignment.words
-        # total_words = len(self.process_transcript(r_transcript))
         total_words = len(words)
         aligned_words = 0
         for word_data in words:
@@ -722,71 +564,6 @@ class QuizzrProcessor:
                 bundle_list.append(submission)
 
         return bundle_list
-
-    # Kept here for reference.
-    """def process_submissions(self, directory: str, submissions: List[str]):
-        # luigi.run(directory, output_directory)
-        new_audio_descriptors = []
-        q2recs = {}
-        u2recs = {}
-
-        for submission in submissions:
-            audio_entry = {}
-
-            wav_file_path = os.path.join(directory, submission)
-            json_file_path = wav_file_path.split(".wav")[0] + ".json"
-            vtt_file_path = wav_file_path.split(".wav")[0] + ".vtt"
-            transcript_path = wav_file_path.split(".wav")[0] + ".txt"
-            original_transcript = ""
-
-            file_id = self.upload_to_gdrive(wav_file_path)
-            with open(json_file_path) as meta_f:
-                metadata = json.load(meta_f)
-                question_id = metadata["question_id"]
-                user_id = metadata["userId"]
-            with open(vtt_file_path) as vtt_f:
-                vtt_contents = vtt_f.read()
-
-            audio_entry["_id"] = file_id
-            audio_entry["questionId"] = question_id
-            audio_entry["userId"] = user_id
-            audio_entry["vtt"] = vtt_contents
-            audio_entry["accuracy"] = self.get_accuracy(transcript_path, original_transcript)
-            audio_entry["version"] = self.VERSION
-            new_audio_descriptors.append(audio_entry)
-
-            self.push_recording(q2recs, file_id, question_id)
-            self.push_recording(u2recs, file_id, user_id)
-
-            os.remove(wav_file_path)
-            os.remove(json_file_path)
-            os.remove(vtt_file_path)
-        self.audio.insert_many(new_audio_descriptors)
-
-        new_question_ids = q2recs.keys()
-        unrec_cursor = self.unrec_questions.find({"_id": {"$in": new_question_ids}})
-        found_unrec_questions = [ question for question in unrec_cursor ]
-        found_unrec_qids = [ question["_id"] for question in found_unrec_questions ]
-        found_rec_qids = [ qid for qid in new_question_ids if qid not in found_unrec_qids ]
-
-        q_batch = []
-        u_batch = []
-
-        for audio_entry in new_audio_descriptors:
-            if audio_entry["questionId"] in found_rec_qids:
-                query_qid = {"_id": audio_entry["questionId"]}
-                q_op = {"$push": {"recordings": audio_entry["_id"]}}
-                q_batch.append(pymongo.UpdateOne(query_qid, q_op))
-            else:
-                question = None
-            query_uid = {"_id": audio_entry["userId"]}
-            u_op = {"$push": {"recordedAudios": audio_entry["_id"]}}
-            u_batch.append(pymongo.UpdateOne(query_uid, u_op))
-
-        self.unrec_questions.delete_many()
-        self.rec_questions.insert_many(found_unrec_questions)
-        self.rec_questions.bulk_write(q_batch)
-        self.users.bulk_write(u_batch)"""
 
 
 def delete_submission(directory: str, submission_name: str, file_types: List[str]):

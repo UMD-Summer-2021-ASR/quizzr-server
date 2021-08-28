@@ -320,8 +320,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                     and (not expected_answers or len(recordings) == len(expected_answers))
                     and (not transcripts or len(recordings) == len(transcripts))
                     and (not correct_flags or len(recordings) == len(correct_flags))):
-                # app.logger.error("Received incomplete form batch. Aborting")
-                # return "incomplete_batch", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
                     "Received incomplete form batch",
                     "incomplete_batch",
@@ -388,7 +386,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         if audio_doc_count == 0:
             app.logger.error("Could not find any audio documents")
-            # return "empty_unproc_audio", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "Could not find any audio documents",
                 "empty_unproc_audio",
@@ -399,7 +396,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app.logger.info(f"Found {audio_doc_count} unprocessed audio document(s)")
         if not qids:
             app.logger.error("No audio documents contain question IDs")
-            # return "empty_qid2entries", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "No audio documents contain question IDs",
                 "empty_qid2entries",
@@ -484,8 +480,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             _debug_variable("correct", correct)
 
             if not recording:
-                # app.logger.error("No audio recording defined. Aborting")
-                # return "arg_audio_undefined", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
                     "Argument 'audio' is undefined",
                     "undefined_arg",
@@ -495,8 +489,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 )
 
             if not rec_type:
-                # app.logger.error("Form argument 'recType' is undefined. Aborting")
-                # return "arg_recType_undefined", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
                     "Argument 'recType' is undefined",
                     "undefined_arg",
@@ -505,8 +497,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                     True
                 )
             elif rec_type not in valid_rec_types:
-                # app.logger.error(f"Invalid rec type '{rec_type!r}'. Aborting")
-                # return "arg_recType_invalid", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
                     f"Invalid rec type: '{rec_type!r}'",
                     "invalid_arg",
@@ -517,8 +507,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
             qid_required = rec_type not in ["buzz", "answer"]
             if qid_required and not qb_id:
-                # app.logger.error("Form argument 'qid' expected. Aborting")
-                # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
                     "Form argument 'qb_id' expected",
                     "undefined_arg",
@@ -1359,7 +1347,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         DELETE: Remove the profile
         """
         decoded = _verify_id_token()
-        # decoded = {"uid": "dev"}
         user_id = decoded["uid"]
         if request.method == "GET":
             result = qtpm.get_profile(user_id, "private")
@@ -1369,11 +1356,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             return result
         elif request.method == "POST":
             args = request.get_json()
-            # path, op = api.path_for("create_profile")
-            # schema = api.build_schema(api.api["paths"][path][op]["requestBody"]["content"]["application/json"]["schema"])
-            # err = _validate_args(args, schema)
-            # if err:
-            #     return err
             _debug_variable("args", args)
             if len(args["username"]) == 0:
                 return _make_err_response(
@@ -1527,40 +1509,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     def pick_game_question():
         """Retrieve a batch of randomly-selected questions and attempt to retrieve the associated recordings with the
         best evaluations possible without getting recordings from different users in the same question."""
-        # cursor = qtpm.rec_questions.find({"qb_id": {"$exists": True}}, {"qb_id": 1})
-        # question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
-        # if not question_ids:
-        #     app.logger.error("No recorded questions found. Aborting")
-        #     return "rec_empty_qids", HTTPStatus.NOT_FOUND
-        #
-        # # question_ids = qtpm.rec_question_ids.copy()
-        # audios = []
-        # while True:
-        #     next_question_id = random.choice(question_ids)
-        #     cursor = qtpm.rec_questions.find({"qb_id": next_question_id})
-        #     app.logger.debug(f"{type(next_question_id)} next_question_id = {next_question_id!r}")
-        #
-        #     all_valid = True
-        #     for sentence in cursor:
-        #         if sentence and sentence.get("recordings"):
-        #             app.logger.debug(f"sentence = {sentence!r}")
-        #             audio = qtpm.find_best_audio_doc(
-        #                 sentence.get("recordings"),
-        #                 required_fields=["_id", "questionId", "sentenceId", "vtt", "gentleVtt"]
-        #             )
-        #             if not audio:
-        #                 all_valid = False
-        #                 break
-        #             audios.append(audio)
-        #     if all_valid:
-        #         break
-        #     app.logger.warning(
-        #         f"ID {next_question_id} is invalid or associated question has no valid audio recordings")
-        #     question_ids.remove(next_question_id)
-        #     if not question_ids:
-        #         app.logger.error("Failed to find a viable recorded question. Aborting")
-        #         return "rec_corrupt_questions", HTTPStatus.NOT_FOUND
-        # return {"results": audios}
         categories = request.args.getlist("category")
         difficulty_range_arg = request.args.get("difficultyRange")
         batch_size = int(request.args.get("batchSize") or 1)
