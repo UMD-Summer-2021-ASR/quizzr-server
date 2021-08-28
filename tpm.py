@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import pprint
 import random
 from copy import deepcopy
 from datetime import datetime
@@ -69,17 +70,17 @@ class QuizzrTPM:
         :return: A list of tuples each containing an error type and the cause.
         """
         errs = []
-        self.logger.debug(f"arguments = {arguments!r}")
+        self._debug_variable("arguments", arguments)
         self.logger.debug("Retrieving arguments...")
         blob_name = arguments.get("_id")
-        self.logger.debug(f"{type(blob_name)} blob_name = {blob_name!r}")
+        self._debug_variable("blob_name", blob_name, include_type=True)
         if blob_name is None:
             self.logger.warning("File ID not specified in arguments. Skipping")
             errs.append(("bad_args", "undefined_blob_name"))
             return errs
 
         audio_doc = self.unproc_audio.find_one({"_id": blob_name})
-        self.logger.debug(f"audio_doc = {audio_doc!r}")
+        self._debug_variable("audio_doc", audio_doc)
         if audio_doc is None:
             self.logger.warning("Could not find audio document. Skipping")
             errs.append(("bad_args", "invalid_blob_name"))
@@ -88,14 +89,16 @@ class QuizzrTPM:
         self.logger.debug("Updating audio document with results from processing...")
         proc_audio_entry = audio_doc.copy()
         proc_audio_entry.update(arguments)
-        self.logger.debug(f"proc_audio_entry = {proc_audio_entry!r}")
+        self._debug_variable("proc_audio_entry", proc_audio_entry)
 
         self.audio.insert_one(proc_audio_entry)
         self.unproc_audio.delete_one({"_id": blob_name})
 
-        rec_doc = {"id": audio_doc["_id"], "recType": audio_doc["recType"]}
+        # TODO: Embed difficulty type in document
         qid = audio_doc.get("qb_id")
         sid = audio_doc.get("sentenceId")
+
+        rec_doc = {"id": audio_doc["_id"], "recType": audio_doc["recType"]}
 
         err = self.add_rec_to_question(qid, rec_doc, sid)
         if err:
@@ -127,7 +130,7 @@ class QuizzrTPM:
 
         self.logger.debug("Retrieving question from unrecorded collection...")
         question = self.unrec_questions.find_one(query)
-        self.logger.debug(f"question = {question!r}")
+        self._debug_variable("question", question)
         unrecorded = question is not None
         if unrecorded:
             self.logger.debug("Unrecorded question not found")
@@ -197,7 +200,7 @@ class QuizzrTPM:
         :return: An in-memory bytes buffer handler for the file
         """
         blob_name = "/".join([self.config["BLOB_ROOT"], blob_path])
-        self.logger.debug(f"blob_name = {blob_name!r}")
+        self._debug_variable("blob_name", blob_name)
         blob = self.bucket.blob(blob_name)
         file_bytes = blob.download_as_bytes()
         fh = io.BytesIO(file_bytes)
@@ -240,7 +243,7 @@ class QuizzrTPM:
         )
 
         for audio_doc in audio_cursor:
-            self.logger.debug(f"audio_doc = {audio_doc!r}")
+            self._debug_variable("audio_doc", audio_doc)
             if all(field in audio_doc for field in required_fields):
                 return audio_doc
             self.logger.warning(f"Audio document is missing at least one required field: {', '.join(required_fields)}. Skipping")
@@ -268,7 +271,7 @@ class QuizzrTPM:
         unrec_cursor = self.unrec_questions.find(**kwargs_c)
         found_unrec_qids = []
         for i, question in enumerate(unrec_cursor):
-            self.logger.debug(f"question {i} = {question!r}")
+            self._debug_variable(f"question {i}", question)
             found_unrec_qids.append(question["qb_id"])
             yield question
         self.logger.info(f"Found {len(found_unrec_qids)} unrecorded question(s)")
@@ -286,7 +289,7 @@ class QuizzrTPM:
         rec_count = self.rec_questions.count_documents(**kwargs_c)
         rec_cursor = self.rec_questions.find(**kwargs_c)
         for i, question in enumerate(rec_cursor):
-            self.logger.debug(f"question {i} = {question!r}")
+            self._debug_variable(f"question {i}", question)
             yield question
         self.logger.info(f"Found {rec_count} recorded question(s)")
 
@@ -331,12 +334,12 @@ class QuizzrTPM:
             else:
                 next_id_batch = qids_pool.copy()
                 qids_pool = []
-            self.logger.debug(f"next_id_batch = {next_id_batch!r}")
-            self.logger.debug(f"qids_pool = {qids_pool!r}")
+            self._debug_variable("next_id_batch", next_id_batch)
+            self._debug_variable("qids_pool", qids_pool)
             questions_cursor = self.database.get_collection(collection_name).find({"qb_id": {"$in": next_id_batch}})
             found = set()
             for doc in questions_cursor:
-                self.logger.debug(f"doc = {doc!r}")
+                self._debug_variable("doc", doc)
                 valid_doc = True
                 for field in required_fields:
                     if field not in doc:
@@ -492,10 +495,10 @@ class QuizzrTPM:
                 uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
             else:
                 unproc_audio_batch.append(entry)
-            self.logger.debug(f"entry = {entry!r}")
+            self._debug_variable("entry", entry)
 
-        self.logger.debug(f"unproc_audio_batch = {unproc_audio_batch}")
-        self.logger.debug(f"audio_batch = {audio_batch}")
+        self._debug_variable("unproc_audio_batch", unproc_audio_batch)
+        self._debug_variable("audio_batch", audio_batch)
 
         if not unproc_audio_batch:
             self.logger.info("No documents to insert into the UnprocessedAudio collection. Skipping")
@@ -512,40 +515,6 @@ class QuizzrTPM:
             self.logger.info(f"Inserted {len(proc_results.inserted_ids)} document(s) into the Audio collection")
             self.add_recs_to_users(uid2rec_docs)
         return unproc_results, proc_results
-
-    @staticmethod
-    def get_ids(collection: pymongo.collection.Collection, query: dict = None) -> list:
-        """
-        Return a list of all document IDs based on a query.
-
-        :param collection: pymongo Collection object
-        :param query: MongoDB filter argument
-        :return: The _ids of every document found
-        """
-        ids = []
-        id_cursor = collection.find(query, {"_id": 1})
-        for i, doc in enumerate(id_cursor):
-            ids.append(doc["_id"])
-        return ids
-
-    @staticmethod
-    def get_difficulty_query_op(difficulty_limits: list, difficulty: int) -> dict:
-        """
-        Given the list of difficulty limits and a difficulty type, return the boundaries as a MongoDB filter
-        operator.
-
-        :param difficulty_limits: The upper bound for each difficulty level
-        :param difficulty: The difficulty level to choose
-        :return: The boundaries as a MongoDB filter operator
-        """
-        lower_bound = difficulty_limits[difficulty - 1] + 1 if difficulty > 0 else None
-        upper_bound = difficulty_limits[difficulty]
-        query_op = {}
-        if lower_bound:
-            query_op["$gte"] = lower_bound
-        if upper_bound:
-            query_op["$lte"] = upper_bound
-        return query_op
 
     def get_profile(self, user_id: str, visibility: str) -> Optional[dict]:
         """
@@ -568,7 +537,7 @@ class QuizzrTPM:
         :param username: The public name of the user. Must not conflict with any existing usernames
         :return: A pymongo InsertOneResult object. See documentation for further details
         :raise UserExistsError: When there is an existing user profile with the given username
-        :raise pymongo.errors.DuplicateKeyError:
+        :raise pymongo.errors.DuplicateKeyError: When a user of the given ID already exists
         """
         if self.users.find_one({"username": username}) is not None:
             raise UsernameTakenError(username)
@@ -626,3 +595,170 @@ class QuizzrTPM:
         if "permLevel" not in profile:
             raise MalformedProfileError(f"Field 'permLevel' not found in profile for user '{user_id}'")
         return profile["permLevel"]
+
+    def increment_num_recs(self, user_id: str, difficulty: int):
+        """
+        Increment the ``"numRecs"`` stat for a user.
+
+        :param user_id: The ID of the user profile
+        :param difficulty: The recording difficulty type to increment, including "all"
+        """
+        self.users.update_one({"_id": user_id}, {
+            "$inc": {
+                "stats.recordings.numRecs.all": 1,
+                f"stats.recordings.numRecs.{difficulty}": 1
+            }
+        })
+
+    def add_rec_rating(self, audio_id: str, user_id: str, rating: float):
+        """
+        Push a rating for a given audio recording by a given user and call the ``set_avg_rec_rating`` method.
+
+        :param audio_id: The ID of the audio document to be rated
+        :param user_id: The ID of the user who is rating the audio document
+        :param rating: The rating the user is leaving
+        """
+        audio_doc = self.audio.find_one_and_update({"_id": audio_id}, {
+            "$set": {
+                f"ratings.{user_id}": rating
+            }
+        }, return_document=pymongo.ReturnDocument.AFTER)
+        total_rating = 0
+        for rating_ in audio_doc["ratings"].values():
+            total_rating += rating_
+        avg_rating = total_rating / len(audio_doc["ratings"])
+        self.set_avg_rec_rating(audio_id, avg_rating)
+
+    def set_avg_rec_rating(self, audio_id: str, rating: float):
+        """
+        Set the average recording rating of an audio recording and update the stats of the associated user.
+
+        :param audio_id: The ID of the recording to set
+        :param rating: The average rating to set
+        :raise ProfileNotFoundError: If the user of the audio recording does not exist
+        :raise MalformedProfileError: If the user of the audio recording does not have it embedded in their profile
+        """
+        audio_doc = self.audio.find_one_and_update({"_id": audio_id}, {
+            "$set": {
+                "avgRating": rating
+            }
+        })
+        self._debug_variable("audio_doc", audio_doc)
+        user_id = audio_doc["userId"]
+        profile = self.users.find_one({"_id": user_id})
+        self._debug_variable("profile", profile)
+        if not profile:
+            raise ProfileNotFoundError(f"'{user_id}'")
+        rec_index = QuizzrTPM.index_of_rec(profile["recordedAudios"], audio_id)
+        self._debug_variable("rec_index", rec_index)
+        if rec_index is None:
+            raise MalformedProfileError(f"Expected recording with ID '{audio_id}' in user profile with ID '{user_id}'")
+
+        question = self.rec_questions.find_one({"qb_id": audio_doc["qb_id"]})
+        self._debug_variable("question", question)
+        difficulty = self.get_difficulty_type(question["recDifficulty"])
+        self._debug_variable("difficulty", difficulty)
+        total_ratings_all = rating
+        total_ratings_diff = rating
+        num_rated_recs_all = 1
+        num_rated_recs_diff = 1
+        for i, rec_doc in enumerate(profile["recordedAudios"]):
+            if "avgRating" not in rec_doc or i == rec_index:
+                continue
+            total_ratings_all += rec_doc["avgRating"]
+            num_rated_recs_all += 1
+            # TODO: Use embedded recording difficulty type
+            rec_doc_lookup = self.audio.find_one({"_id": rec_doc["id"]}, {"qb_id": 1})
+            self._debug_variable("rec_doc_lookup", rec_doc_lookup)
+            rec_doc_question = self.rec_questions.find_one({"qb_id": rec_doc_lookup["qb_id"]})
+            self._debug_variable("rec_doc_question", rec_doc_question)
+            rec_doc_difficulty = self.get_difficulty_type(rec_doc_question["recDifficulty"])
+            self._debug_variable("rec_doc_difficulty", rec_doc_difficulty)
+            if rec_doc_difficulty == difficulty:
+                total_ratings_diff += rec_doc["avgRating"]
+                num_rated_recs_diff += 1
+
+        avg_rating_all = total_ratings_all / num_rated_recs_all
+        avg_rating_diff = total_ratings_diff / num_rated_recs_diff
+        self.users.update_one({"_id": user_id}, {
+            "$set": {
+                f"recordedAudios.{rec_index}.avgRating": rating,
+                "stats.recordings.avgRating.all": avg_rating_all,
+                f"stats.recordings.avgRating.{difficulty}": avg_rating_diff
+            }
+        })
+
+    def get_difficulty_type(self, rec_difficulty: float) -> Optional[int]:
+        """
+        Get the difficulty type from the recording difficulty.
+
+        :param rec_difficulty: The recDifficulty field from a question
+        :return: The difficulty type, or None if not applicable
+        """
+        difficulty_limits = self.config["DIFFICULTY_LIMITS"]
+        for difficulty, upper_bound in enumerate(difficulty_limits):
+            lower_bound = difficulty_limits[difficulty - 1] if difficulty > 0 else None
+            if (not lower_bound or lower_bound <= rec_difficulty) and (not upper_bound or rec_difficulty < upper_bound):
+                return difficulty
+
+    def _debug_variable(self, name: str, v, include_type=False):
+        """
+        Send a variable's name and value to the given logger.
+
+        :param name: The name of the variable to display in the logger
+        :param v: The value of the variable
+        :param include_type: Whether to include the type() of the variable
+        """
+        if include_type:
+            prefix = f"{type(v)} "
+        else:
+            prefix = ""
+        val_pp = pprint.pformat(v)
+        self.logger.debug(f"{prefix}{name} = {val_pp}")
+
+    @staticmethod
+    def get_difficulty_query_op(difficulty_limits: list, difficulty: int) -> dict:
+        """
+        Given the list of difficulty limits and a difficulty type, return the boundaries as a MongoDB filter
+        operator.
+
+        :param difficulty_limits: The upper bound for each difficulty level
+        :param difficulty: The difficulty level to choose
+        :return: The boundaries as a MongoDB filter operator
+        """
+        lower_bound = difficulty_limits[difficulty - 1] if difficulty > 0 else None
+        upper_bound = difficulty_limits[difficulty]
+        query_op = {}
+        if lower_bound:
+            query_op["$gte"] = lower_bound
+        if upper_bound:
+            query_op["$lt"] = upper_bound
+        return query_op
+
+    @staticmethod
+    def get_ids(collection: pymongo.collection.Collection, query: dict = None) -> list:
+        """
+        Return a list of all document IDs based on a query.
+
+        :param collection: pymongo Collection object
+        :param query: MongoDB filter argument
+        :return: The _ids of every document found
+        """
+        ids = []
+        id_cursor = collection.find(query, {"_id": 1})
+        for i, doc in enumerate(id_cursor):
+            ids.append(doc["_id"])
+        return ids
+
+    @staticmethod
+    def index_of_rec(recordings: List[dict], target_id: str) -> Optional[int]:
+        """
+        Get the index of an embedded recording document in a profile.
+
+        :param recordings: The list of embedded recording documents to search through
+        :param target_id: The target audio ID
+        :return: The index of the recording in the list, or None if not found
+        """
+        for i, rec_doc in enumerate(recordings):
+            if rec_doc["id"] == target_id:
+                return i
