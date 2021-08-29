@@ -819,6 +819,14 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """Upload a game session to MongoDB for users to share."""
         arguments = request.get_json()
 
+        if arguments is None:
+            return _make_err_response(
+                "No arguments specified",
+                "no_args",
+                HTTPStatus.BAD_REQUEST,
+                log_msg=True
+            )
+
         game_id = arguments.get("id")
         session = arguments.get("session")
 
