@@ -1,14 +1,14 @@
 # Quizzr.io Data Flow Server
 
 ## Overview
-The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.6, 3.7, and 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
+The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.
 
 ## Prerequisites
 Prior to installing the server, either through Docker (see [Using Docker](#Using-Docker)) or directly onto your machine, make sure you have addressed the following prerequisites:
-* Python 3.6, 3.7, or 3.8 with `pip` installed (does not apply with Docker).
+* Python 3.8 with the latest version of `pip` installed (does not apply with Docker).
 * A MongoDB Atlas with the following (see [Get Started with Atlas](https://docs.atlas.mongodb.com/getting-started/), parts 1-5, for more information):
   * An Atlas account; 
-  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "Games", "RecordedQuestions", "UnrecordedQuestions", and "Users" collections, all of which are not capped;
+  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "RecordedQuestions", "UnrecordedQuestions", and "Users" collections, all of which are not capped;
   * A database user with permission to read and write to all collections in the database; and
   * A connection through the database user with a Python driver version 3.6 or later.
 * A Firebase project with the Cloud Storage service enabled and a connection to the project through an Admin SDK set up (see [Cloud Storage for Firebase](https://firebase.google.com/docs/storage/#implementation_path) and [Add the Firebase Admin SDK to your server](https://firebase.google.com/docs/admin/setup) respectively for more information).
@@ -16,7 +16,7 @@ Prior to installing the server, either through Docker (see [Using Docker](#Using
 ## Installation
 1. Clone this repository.
 1. Install all the necessary dependencies by executing `pip install -r requirements.txt` in the folder of the repository. It may be a good idea to set up a virtual environment prior to doing this step to avoid conflicts with already installed packages.
-1. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the associated README.md document. If you are installing it through the source code on a Linux operating system, you may need to change `install_deps.sh` to be based on your distribution. You will need to modify the `wget` command in `install_models.sh` to include the `--no-check-certificate` flag because the certificate for accessing `https://www.lowerquality.com` has expired.
+1. Install [Gentle](https://github.com/lowerquality/gentle) by following the instructions in the associated README.md document. If you are installing it through the source code on a Linux operating system, you may need to change `install_deps.sh` to be based on your distribution.
 1. Create a directory for the instance path of the server. By default, it is `~/quizzr_server`, but it can be overridden by the `Q_INST_PATH` environment variable or the `test_inst_path` parameter in the app factory function, `create_app`. In the instance path, create another directory called `secrets`.
 1. Generate a private key for the Firebase Admin SDK service account and store it at `secrets/firebase_storage_key.json`.
 
@@ -51,17 +51,8 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `DEFAULT_LEADERBOARD_SIZE` The default number of entries on the leaderboard.
 * `MAX_USERNAME_LENGTH` The maximum allowable number of characters in a username.
 * `USERNAME_CHAR_SET` A string containing all allowable characters in a username.
-* `DEFAULT_RATE_LIMITS` The default request rate limits for the server. Set this value to an empty array to disable the rate limiter. See [Flask Limiter](https://flask-limiter.readthedocs.io/en/stable/#) documentation for more details.
 
-It is also possible to override configuration fields through a set of overrides passed into the `test_overrides` argument for the app factory function.
-
-### Environment Variables
-
-There are also several environment variables that are not in the config file. The following describes each environment variable:
-* `QUIZZR_LOG` The minimum log level to filter messages by. Valid log levels are, from least to greatest, `DEBUG`, `INFO`, `WARNING`, `ERROR`, and `CRITICAL`. Default is `INFO`.
-* `Q_INST_PATH` The root directory for configurations, secrets, and storage. Default is `~/quizzr_server`.
-* `Q_STG_ROOT` The root directory to use for storage. Default is `$Q_INST_PATH/storage`.
-* `Q_CONFIG_NAME` The name of the config file to use. Default is `sv_config.json`.
+It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
 ### Configuration Defaults
 The following JSON data shows the default values of each configuration field. You may also view the default configuration in `server.py`.
@@ -102,8 +93,7 @@ The following JSON data shows the default values of each configuration field. Yo
   "MAX_LEADERBOARD_SIZE": 200,
   "DEFAULT_LEADERBOARD_SIZE": 10,
   "MAX_USERNAME_LENGTH": 16,
-  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-  "DEFAULT_RATE_LIMITS": []
+  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 }
 ```
 
@@ -140,5 +130,10 @@ Notes:
 * Each volume specified is either a named volume or a path for a bind mount, and `<your-connection-string>` is the connection string for the MongoDB Client (see [Running the Server](#Running-the-Server)).
 * You will need to have the private Firebase key in the mounting directory (see [Installation](#Installation)).
 
+## Troubleshooting
+The following contains potential problems you may encounter while installing or running this server:
+* The installation execution for Gentle fails due to the certificate expiring: Modify the `wget` command in `install_models.sh` to include the `--no-check-certificate` flag.
+* The execution for installing Gentle fails to create `kaldi.mk`: Run `./configure --enable-static`, `make`, and `make install` in `gentle/ext/kaldi/tools/openfst`. Then, run `install.sh` again.
+
 ## Endpoints
-All documentation for the endpoints is in [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.
+All documentation for the endpoints has been moved to [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.
