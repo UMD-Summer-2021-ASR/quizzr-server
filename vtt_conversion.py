@@ -1,5 +1,4 @@
 import string
-from datetime import time
 from typing import Tuple, Iterable
 
 from gentle import transcription
@@ -17,8 +16,8 @@ def aligned_word_to_vtt_cue(word_entry: transcription.Word, speaker_name="Speake
     if word_entry.case != "success":
         return
     timestamp_header: str
-    start_stamp = seconds_to_isoformat(word_entry.start)
-    end_stamp = seconds_to_isoformat(word_entry.end)
+    start_stamp = seconds_to_vtt_timestamp(word_entry.start)
+    end_stamp = seconds_to_vtt_timestamp(word_entry.end)
     timestamp_header = to_symbol.join([start_stamp, end_stamp])
     speaker_tag = f"<v {speaker_name}>"
     caption = speaker_tag + word_entry.word
@@ -43,30 +42,30 @@ def gentle_alignment_to_vtt(words: Iterable[transcription.Word],
     return vtt
 
 
-def seconds_to_isoformat(seconds: float) -> str:
+def seconds_to_vtt_timestamp(seconds: float) -> str:
     """
-    Convert seconds into a properly-formatted ISO timestamp (00:MM:SS.FFFFFF)
+    Convert seconds into a VTT timestamp.
 
     :param seconds: The number of seconds, which may include values greater than or equal to 60. However, it will ignore
                     more than 60 minutes worth of time.
-    :return: An ISO timestamp representation
+    :return: A string timestamp in the form MM:SS.FFF or MM:S.FFF
     """
-    minutes, seconds, microseconds = divide_seconds(seconds)
-    return time(minute=minutes, second=seconds, microsecond=microseconds).isoformat()
+    minutes, seconds, milliseconds = divide_seconds(seconds)
+    return f"{minutes:02}:{seconds}.{milliseconds:03}"
 
 
 def divide_seconds(seconds: float) -> Tuple[int, int, int]:
     """
-    Split up seconds into a tuple of minutes, seconds, and microseconds.
-    Postcondition: 0 <= minutes < 60, 0 <= seconds < 60, 0 <= microseconds < 1000000
+    Split up seconds into a tuple of minutes, seconds, and milliseconds.
+    Postcondition: 0 <= minutes < 60, 0 <= seconds < 60, 0 <= milliseconds < 1000
 
     :param seconds: The number of seconds, which may include values greater than or equal to 60. However, it will ignore
                     more than 60 minutes worth of time.
-    :return: The number of minutes, seconds, and microseconds as a tuple
+    :return: The number of minutes, seconds, and milliseconds as a tuple
     """
-    microseconds = seconds * 1e+6
+    milliseconds = seconds * 1e+3
     minutes = seconds // 60
-    return int(minutes % 60), int(seconds % 60), int(microseconds % 1e+6)
+    return int(minutes % 60), int(seconds % 60), int(milliseconds % 1e+3)
 
 
 def realign_alignment(orig_alignment: transcription.Transcription) -> transcription.Transcription:
