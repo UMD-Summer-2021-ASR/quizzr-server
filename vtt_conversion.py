@@ -87,6 +87,7 @@ def realign_alignment(orig_alignment: transcription.Transcription) -> transcript
     prev_end_time_unaligned = 0
     total_lag = 0
     for aligned_word in orig_alignment.words:
+        # Re-align words based on an approximation / fix any illogical timestamps.
         if not aligned_word.success():
             # The estimated amount of time it would take to say the word
             sub_spk_time = char_speak_rate * len(aligned_word.word)
@@ -125,4 +126,14 @@ def realign_alignment(orig_alignment: transcription.Transcription) -> transcript
                                             new_start, new_end, new_duration)
         realigned_words.append(realigned_word)
         prev_end_time = new_end
+
+    # Second pass: Merge hyphenated words entered twice.
+    prev_word = None
+    for i, word in enumerate(realigned_words[:]):  # Use a temporary copy to avoid iteration issues w/ deleting items.
+        if prev_word is not None and '-' in word.word and prev_word.word == word.word:
+            word.start = prev_word.start
+            word.duration += prev_word.duration
+            realigned_words.pop(i - 1)
+        prev_word = word
+
     return transcription.Transcription(transcript, realigned_words)
