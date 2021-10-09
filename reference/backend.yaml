@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.10.1
+  version: 0.10.2
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -987,6 +987,56 @@ paths:
       parameters: []
       security:
         - Firebase-Auth: []
+  '/profile/{username}/history':
+    parameters:
+      - schema:
+          type: string
+        name: username
+        in: path
+        required: true
+    get:
+      summary: Get Player Game History
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Game-Session'
+                required:
+                  - results
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+      operationId: get_game_history
+      description: 'Retrieve the game history of a given username sorted from latest to earliest, optionally only including games from "start" to "end".'
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: iRange
+          description: 'A zero index range that filters the results from the start to the end, inclusive.'
+        - schema:
+            type: string
+          in: query
+          name: start
+          description: A zero index that excludes results preceding in index.
+        - schema:
+            type: string
+          in: query
+          name: end
+          description: A zero index that excludes results past this index.
   /question:
     get:
       summary: Get Recorded Question
@@ -1471,6 +1521,62 @@ components:
       title: Game-Session
       type: object
       description: A game session
+      properties:
+        buzz_recording:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items: {}
+        settings:
+          type: object
+          required:
+            - gamemode
+            - rounds_num
+            - questions_num
+            - tiebreaker
+            - buzz_time
+            - post_buzz_time
+            - gap_time
+            - teams
+          properties:
+            gamemode:
+              type: string
+            rounds_num:
+              type: integer
+            questions_num:
+              type: integer
+            tiebreaker:
+              type: string
+            buzz_time:
+              type: integer
+            post_buzz_time:
+              type: integer
+            gap_time:
+              type: integer
+            teams:
+              type: integer
+        date:
+          type: string
+          format: date
+        questions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              qb_id:
+                type: number
+            required:
+              - id
+              - qb_id
+      required:
+        - buzz_recording
+        - settings
+        - date
+        - questions
     Game-Stats:
       title: Game-Stats
       type: object
