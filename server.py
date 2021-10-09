@@ -1513,6 +1513,55 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 True
             )
 
+    @app.route("/profile/<username>/history", methods=["GET"])
+    def get_game_history(username):
+        """Retrieve the game history of a given username, optionally only including games from "start" to "end"."""
+        start = request.args.get("start")
+        if start is not None and start != "":
+            start = int(start)
+        else:
+            start = None
+
+        end = request.args.get("end")
+        if end is not None and end != "":
+            end = int(end) + 1
+        else:
+            end = None
+
+        user_profile = qtpm.users.find_one({"username": username}, {"history": 1})
+
+        if not user_profile:
+            return _make_err_response(
+                f"No such user with username '{username}'",
+                "user_not_found",
+                HTTPStatus.NOT_FOUND,
+                [username],
+                True
+            )
+
+        if "history" not in user_profile:
+            return _make_err_response(
+                f"Game history not found for user with username '{username}'",
+                "history_not_found",
+                HTTPStatus.NOT_FOUND,
+                [username],
+                True
+            )
+
+        history = user_profile["history"]
+        try:
+            history.sort(reverse=True, key=lambda session: datetime.strptime(session["date"], "%m/%d/%Y-%H:%M:%S"))
+        except KeyError as e:
+            app.logger.exception("Encountered a KeyError while acquiring game history")
+            return _make_err_response(
+                f"Field {e} not found",
+                "field_not_found",
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                [str(e)]
+            )
+
+        return {"results": history[start:end]}
+
     @app.route("/question", methods=["GET"])
     def pick_game_question():
         """Retrieve a batch of randomly-selected questions and attempt to retrieve the associated recordings with the
