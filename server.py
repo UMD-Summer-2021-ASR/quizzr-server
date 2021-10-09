@@ -848,6 +848,24 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 True
             )
 
+        if "settings" not in session:
+            return _make_err_response(
+                "Session does not contain a 'settings' field",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["settings"],
+                True
+            )
+
+        if "players" not in session["settings"]:
+            return _make_err_response(
+                "Session settings do not contain a list of players",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                ["players"],
+                True
+            )
+
         session["_id"] = game_id
 
         try:
@@ -861,7 +879,23 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 True
             )
 
+        update_game_histories(session)
+
         return '', HTTPStatus.CREATED
+
+    def update_game_histories(session):
+        """
+        Update the "history" field of every player in the "settings" of the given session
+
+        :param session: The metadata of a game session. Requires a "settings" field that contains the "players" field,
+                        an array of user IDs.
+        """
+        update_batch = []
+
+        for player in session["settings"]["players"]:
+            update_batch.append(UpdateOne({"_id": player}, {"$push": {"history": session}}))
+
+        qtpm.users.bulk_write(update_batch)
 
     def handle_game_results_category(session_results):
         """
@@ -1550,7 +1584,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         history = user_profile["history"]
         try:
-            history.sort(reverse=True, key=lambda session: datetime.strptime(session["date"], "%m/%d/%Y-%H:%M:%S"))
+            history.sort(reverse=True, key=lambda session: datetime.strptime(session["date"], "%Y %m %d %H %M %S"))
         except KeyError as e:
             app.logger.exception("Encountered a KeyError while acquiring game history")
             return _make_err_response(
