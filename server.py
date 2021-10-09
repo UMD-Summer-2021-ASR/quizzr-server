@@ -1550,17 +1550,35 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     @app.route("/profile/<username>/history", methods=["GET"])
     def get_game_history(username):
         """Retrieve the game history of a given username, optionally only including games from "start" to "end"."""
-        start = request.args.get("start")
-        if start is not None and start != "":
-            start = int(start)
-        else:
-            start = None
+        index_range_arg = request.args.get("iRange")
 
-        end = request.args.get("end")
-        if end is not None and end != "":
-            end = int(end) + 1
+        if index_range_arg:
+            index_range = [int(num) for num in re.split(r",\s*", index_range_arg)]
+
+            if len(index_range) != 2:
+                return _make_err_response(
+                    "Too many or too few items were provided for query parameter 'iRange'",
+                    "invalid_length",
+                    HTTPStatus.BAD_REQUEST,
+                    [len(index_range)],
+                    True
+                )
+
+            start = index_range[0]
+            end = index_range[1] + 1
         else:
-            end = None
+            start = request.args.get("start")
+            end = request.args.get("end")
+
+            if start is not None and start != "":
+                start = int(start)
+            else:
+                start = None
+
+            if end is not None and end != "":
+                end = int(end) + 1
+            else:
+                end = None
 
         user_profile = qtpm.users.find_one({"username": username}, {"history": 1})
 
@@ -1588,7 +1606,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         except KeyError as e:
             app.logger.exception("Encountered a KeyError while acquiring game history")
             return _make_err_response(
-                f"Field {e} not found",
+                f"Field {e} not found",  # No quotes because KeyError message already contains them
                 "field_not_found",
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 [str(e)]
