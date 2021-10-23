@@ -987,6 +987,56 @@ paths:
       parameters: []
       security:
         - Firebase-Auth: []
+  '/profile/{username}/history':
+    parameters:
+      - schema:
+          type: string
+        name: username
+        in: path
+        required: true
+    get:
+      summary: Get Player Game History
+      tags:
+        - internal
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Game-Session'
+                required:
+                  - results
+        '400':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+      operationId: get_game_history
+      description: 'Retrieve the game history of a given username sorted from latest to earliest, optionally only including games from "start" to "end".'
+      parameters:
+        - schema:
+            type: string
+          in: query
+          name: iRange
+          description: 'A zero index range that filters the results from the start to the end, inclusive.'
+        - schema:
+            type: string
+          in: query
+          name: start
+          description: A zero index that excludes results preceding in index.
+        - schema:
+            type: string
+          in: query
+          name: end
+          description: A zero index that excludes results past this index.
   /question:
     get:
       summary: Get Recorded Question
@@ -1471,6 +1521,62 @@ components:
       title: Game-Session
       type: object
       description: A game session
+      properties:
+        buzz_recording:
+          type: array
+          items:
+            type: array
+            items:
+              type: array
+              items: {}
+        settings:
+          type: object
+          required:
+            - gamemode
+            - rounds_num
+            - questions_num
+            - tiebreaker
+            - buzz_time
+            - post_buzz_time
+            - gap_time
+            - teams
+          properties:
+            gamemode:
+              type: string
+            rounds_num:
+              type: integer
+            questions_num:
+              type: integer
+            tiebreaker:
+              type: string
+            buzz_time:
+              type: integer
+            post_buzz_time:
+              type: integer
+            gap_time:
+              type: integer
+            teams:
+              type: integer
+        date:
+          type: string
+          format: date
+        questions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              qb_id:
+                type: number
+            required:
+              - id
+              - qb_id
+      required:
+        - buzz_recording
+        - settings
+        - date
+        - questions
     Game-Stats:
       title: Game-Stats
       type: object
