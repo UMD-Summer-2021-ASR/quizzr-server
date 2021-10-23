@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import logging.handlers
@@ -2106,3 +2107,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return response, status_code
 
     return app
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run the data flow server", add_help=True)
+    parser.add_argument("--host", dest="host", help="The host name to use for the server", default="localhost")
+    parser.add_argument("--port", "-p", dest="port", type=int, help="The port to bind to", default=5000)
+    args = parser.parse_args()
+    app = create_app()
+    app.run(host=args.host, port=args.port)
+
+
+if __name__ == '__main__':
+    main()
