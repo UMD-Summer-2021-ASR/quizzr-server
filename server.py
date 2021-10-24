@@ -133,7 +133,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             config = json.load(config_f)
         app_conf.update(config)
     else:
-        app.logger.warning(f"Config at path '{conf_path}' not found")
+        app.logger.info(f"Config at path '{conf_path}' not found")
 
     # env_cfg = {}
     #
