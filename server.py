@@ -1072,11 +1072,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 }
             }
             update_batch.append(UpdateOne({"username": username}, processed_update_args))
-        app.logger.info("Sending bulk write operation...")
-        results = qtpm.users.bulk_write(update_batch)
-        app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
-        app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
-        return {"successful": results.matched_count, "requested": len(session_results["users"])}
+
+        if update_batch:
+            app.logger.info("Sending bulk write operation...")
+            results = qtpm.users.bulk_write(update_batch)
+            app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
+            app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
+            return {"successful": results.matched_count, "requested": len(session_results["users"])}
+        else:
+            app.logger.info("Bulk write operation is empty. Skipping")
+            return {"successful": 0, "requested": 0}
 
     def handle_game_results_categories(session_results):
         """
@@ -1262,11 +1267,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
             update_batch.append(UpdateOne({"username": username}, processed_update_args))
         _debug_variable("update_batch", update_batch)
-        app.logger.info("Sending bulk write operation...")
-        results = qtpm.users.bulk_write(update_batch)
-        app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
-        app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
-        return {"successful": results.matched_count, "requested": len(session_results["users"])}
+
+        if update_batch:
+            app.logger.info("Sending bulk write operation...")
+            results = qtpm.users.bulk_write(update_batch)
+            app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
+            app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
+            return {"successful": results.matched_count, "requested": len(session_results["users"])}
+        else:
+            app.logger.info("Bulk write operation is empty. Skipping")
+            return {"successful": 0, "requested": 0}
 
     @app.post("/backend/key")
     def generate_secret_key():
