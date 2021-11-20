@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Quizzr.io Data Flow Server
-  version: 0.10.3
+  version: 0.11.0
   summary: API for the Flask data flow server
   description: 'The Quizzr.io data flow server functions as the central piece of the back-end, handling requests for changing and getting data in common but specific manners. Examples include pre-screening audio recordings of question transcripts, selecting a question to answer or record, and enabling asynchronous processing of audio. It is written in the Flask framework for Python 3.8 and uses Firebase Storage to store audio files and the MongoDB Quizzr Atlas to store data. It is especially designed to work with the front-end portion of Quizzr.io. See the [browser-asr](https://github.com/UMD-Summer-2021-ASR/browser-asr) repository for more details on how to set it up with the back-end.'
   contact:
@@ -408,6 +408,26 @@ paths:
               required:
                 - name
         description: The arguments to provide in the POST request
+  '/downvote/{audio_id}':
+    parameters:
+      - schema:
+          type: string
+        name: audio_id
+        in: path
+        required: true
+        description: The target audio document ID
+    patch:
+      summary: Downvote a Recording
+      tags:
+        - frontend
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+        '404':
+          $ref: '#/components/responses/Error'
+      operationId: downvote
+      description: Downvote an audio recording
   /game:
     post:
       summary: Upload Game
@@ -1404,6 +1424,26 @@ paths:
 
         **WARNING: A secret key can be generated only once per server session. This key cannot be recovered if lost.**
     parameters: []
+  '/upvote/{audio_id}':
+    parameters:
+      - schema:
+          type: string
+        name: audio_id
+        in: path
+        required: true
+        description: The target audio document ID
+    patch:
+      summary: Upvote a Recording
+      tags:
+        - frontend
+        - qb-pipeline
+      responses:
+        '200':
+          description: OK
+        '404':
+          $ref: '#/components/responses/Error'
+      operationId: upvote
+      description: Upvote an audio recording
   /validate:
     get:
       summary: Verify Firebase ID Token
@@ -1430,46 +1470,6 @@ paths:
           description: Unauthorized
       operationId: check_token
       description: 'Attempts to validate the Firebase ID token given in the Authorization header. Note: The same behavior occurs with `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, and `TRACE`.'
-  '/upvote/{audio_id}':
-    parameters:
-      - schema:
-          type: string
-        name: audio_id
-        in: path
-        required: true
-        description: The target audio document ID
-    patch:
-      summary: Upvote a Recording
-      tags:
-        - frontend
-        - qb-pipeline
-      responses:
-        '200':
-          description: OK
-        '404':
-          $ref: '#/components/responses/Error'
-      operationId: upvote
-      description: Upvote an audio recording
-  '/downvote/{audio_id}':
-    parameters:
-      - schema:
-          type: string
-        name: audio_id
-        in: path
-        required: true
-        description: The target audio document ID
-    patch:
-      summary: Downvote a Recording
-      tags:
-        - frontend
-        - qb-pipeline
-      responses:
-        '200':
-          description: OK
-        '404':
-          $ref: '#/components/responses/Error'
-      operationId: downvote
-      description: Downvote an audio recording
 components:
   schemas:
     Audio-Id:
