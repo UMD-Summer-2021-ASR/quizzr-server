@@ -761,6 +761,19 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """
         return _gen_secret_key("socket")
 
+    @app.route("/downvote/<audio_id>", methods=["PATCH"])
+    def downvote(audio_id):
+        result = qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"downvotes": 1}})
+        if result.matched_count == 0:
+            return _make_err_response(
+                f"Audio document with ID '{audio_id}' not found",
+                "doc_not_found",
+                HTTPStatus.NOT_FOUND,
+                [audio_id],
+                True
+            )
+        return '', HTTPStatus.OK
+
     @app.put("/game_results")
     def handle_game_results():
         """
@@ -1780,6 +1793,19 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app.logger.info(f"Uploading {len(arguments_list)} unrecorded question(s)...")
         results = qtpm.unrec_questions.insert_many(arguments_list)
         app.logger.info(f"Successfully uploaded {len(results.inserted_ids)} question(s)")
+        return '', HTTPStatus.OK
+
+    @app.route("/upvote/<audio_id>", methods=["PATCH"])
+    def upvote(audio_id):
+        result = qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"upvotes": 1}})
+        if result.matched_count == 0:
+            return _make_err_response(
+                f"Audio document with ID '{audio_id}' not found",
+                "doc_not_found",
+                HTTPStatus.NOT_FOUND,
+                [audio_id],
+                True
+            )
         return '', HTTPStatus.OK
 
     @app.route("/validate", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"])
