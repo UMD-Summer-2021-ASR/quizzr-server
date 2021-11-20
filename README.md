@@ -105,6 +105,11 @@ $ export CONNECTION_STRING=your-connection-string
 $ export FLASK_APP=server
 $ flask run
 ```
+Alternatively, you can run the server.py module (see `python 3 server.py -h` for more information):
+```bash
+$ export CONNECTION_STRING=your-connection-string
+$ python3 server.py
+```
 You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 

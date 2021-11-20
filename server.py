@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import logging.handlers
@@ -132,7 +133,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             config = json.load(config_f)
         app_conf.update(config)
     else:
-        app.logger.warning(f"Config at path '{conf_path}' not found")
+        app.logger.info(f"Config at path '{conf_path}' not found")
 
     # env_cfg = {}
     #
@@ -760,6 +761,19 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """
         return _gen_secret_key("socket")
 
+    @app.route("/downvote/<audio_id>", methods=["PATCH"])
+    def downvote(audio_id):
+        result = qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"downvotes": 1}})
+        if result.matched_count == 0:
+            return _make_err_response(
+                f"Audio document with ID '{audio_id}' not found",
+                "doc_not_found",
+                HTTPStatus.NOT_FOUND,
+                [audio_id],
+                True
+            )
+        return '', HTTPStatus.OK
+
     @app.put("/game_results")
     def handle_game_results():
         """
@@ -894,6 +908,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         for player in session["settings"]["players"]:
             update_batch.append(UpdateOne({"_id": player}, {"$push": {"history": session}}))
+        
+        if len(update_batch) == 0:
+            return
 
         qtpm.users.bulk_write(update_batch)
 
@@ -1068,11 +1085,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 }
             }
             update_batch.append(UpdateOne({"username": username}, processed_update_args))
-        app.logger.info("Sending bulk write operation...")
-        results = qtpm.users.bulk_write(update_batch)
-        app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
-        app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
-        return {"successful": results.matched_count, "requested": len(session_results["users"])}
+
+        if update_batch:
+            app.logger.info("Sending bulk write operation...")
+            results = qtpm.users.bulk_write(update_batch)
+            app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
+            app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
+            return {"successful": results.matched_count, "requested": len(session_results["users"])}
+        else:
+            app.logger.info("Bulk write operation is empty. Skipping")
+            return {"successful": 0, "requested": 0}
 
     def handle_game_results_categories(session_results):
         """
@@ -1258,11 +1280,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
             update_batch.append(UpdateOne({"username": username}, processed_update_args))
         _debug_variable("update_batch", update_batch)
-        app.logger.info("Sending bulk write operation...")
-        results = qtpm.users.bulk_write(update_batch)
-        app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
-        app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
-        return {"successful": results.matched_count, "requested": len(session_results["users"])}
+
+        if update_batch:
+            app.logger.info("Sending bulk write operation...")
+            results = qtpm.users.bulk_write(update_batch)
+            app.logger.info(f"Matched {results.matched_count} documents and modified {results.modified_count} documents")
+            app.logger.info(f"Request body contained profile updates for {len(session_results['users'])} users")
+            return {"successful": results.matched_count, "requested": len(session_results["users"])}
+        else:
+            app.logger.info("Bulk write operation is empty. Skipping")
+            return {"successful": 0, "requested": 0}
 
     @app.post("/backend/key")
     def generate_secret_key():
@@ -1768,6 +1795,19 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         app.logger.info(f"Successfully uploaded {len(results.inserted_ids)} question(s)")
         return '', HTTPStatus.OK
 
+    @app.route("/upvote/<audio_id>", methods=["PATCH"])
+    def upvote(audio_id):
+        result = qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"upvotes": 1}})
+        if result.matched_count == 0:
+            return _make_err_response(
+                f"Audio document with ID '{audio_id}' not found",
+                "doc_not_found",
+                HTTPStatus.NOT_FOUND,
+                [audio_id],
+                True
+            )
+        return '', HTTPStatus.OK
+
     @app.route("/validate", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE"])
     def check_token():
         """Endpoint for ORY Oathkeeper to validate a Bearer token. Accepts every standard method type because
@@ -2106,3 +2146,16 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         return response, status_code
 
     return app
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run the data flow server", add_help=True)
+    parser.add_argument("--host", dest="host", help="The host name to use for the server", default="localhost")
+    parser.add_argument("--port", "-p", dest="port", type=int, help="The port to bind to", default=5000)
+    args = parser.parse_args()
+    app = create_app()
+    app.run(host=args.host, port=args.port)
+
+
+if __name__ == '__main__':
+    main()

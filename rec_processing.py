@@ -609,7 +609,7 @@ def start_watcher(db_name, tpm_config, firebase_app_specifier, rec_dir, proc_con
     logger.debug("Instantiating QuizzrWatcher...")
     qw = QuizzrWatcher(queue_dir, error_dir, qph.execute, queue, logger=logger)
     logger.debug("Finished instantiating QuizzrWatcher")
-    logger.debug("Finished initialization. Entering main loop")
+    logger.info("Finished initialization. Entering main loop")
     qw.execute()
 
 
