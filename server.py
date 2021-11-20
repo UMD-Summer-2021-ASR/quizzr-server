@@ -1812,9 +1812,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     def check_token():
         """Endpoint for ORY Oathkeeper to validate a Bearer token. Accepts every standard method type because
         Oathkeeper also forwards the method type."""
-        backend_name = request.args.get("backend")
-        if backend_name:
-            _verify_backend_key(backend_name)
+        backend_names = request.args.getlist("backend")
+        if backend_names:
+            backend_name = _verify_backend_key(backend_names)
             return {"subject": backend_name}
         decoded = _verify_id_token()
         user_id = decoded["uid"]
@@ -1965,22 +1965,29 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         return decoded
 
-    def _verify_backend_key(component_name: str):
+    def _verify_backend_key(allowed_components: List[str]):
         """
         Run the logic flow for verifying a backend key, complete with logging messages. Only runnable in the context of
         a view function.
 
-        :param component_name: The key to index in the secret_keys variable
+        :param allowed_components: A list of allowed backend components
         """
+        _debug_variable("allowed_components", allowed_components)
+
         app.logger.info("Retrieving secret key from header 'Authorization'...")
         secret_key = request.headers.get("Authorization")
+        component_name = request.headers.get("Backend-Name")
 
         _debug_variable("secret_key", secret_key, private=True)
+        _debug_variable("component_name", component_name)
 
         prefix = "Bearer "
         if secret_key.startswith(prefix):
             secret_key = secret_key[len(prefix):]
 
+        if component_name not in allowed_components:
+            app.logger.info(f"Component '{component_name}' is not permitted to access this resource")
+            abort(HTTPStatus.UNAUTHORIZED)
         if component_name not in secret_keys:
             app.logger.info(f"Secret key for component '{component_name}' not generated. Access to resource denied")
             abort(HTTPStatus.UNAUTHORIZED)
@@ -1988,6 +1995,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             app.logger.info(f"Secret key for component '{component_name}' does not match. Access to resource denied")
             abort(HTTPStatus.UNAUTHORIZED)
         app.logger.info("Access to resource granted")
+        return component_name
 
     def _get_private_data_string(original):
         """
