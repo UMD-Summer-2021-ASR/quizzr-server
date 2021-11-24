@@ -35,7 +35,7 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `BLOB_NAME_LENGTH` The length of the string to generate when naming uploaded audio files.
 * `Q_ENV` The type of environment to use. A value of `development` or `testing` makes the server identify unauthenticated users as `dev` and allows access to the `/uploadtest` endpoint.
 * `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
-* `DIFFICULTY_LIMITS` The upper bound of each difficulty, or `null` to have no upper bound.
+* `DIFFICULTY_DIST` The fractional distribution of recordings by difficulty. Example: `[0.6, 0.3, 0.1]` makes the 60% least difficult recordings have a "0" difficulty, followed by the next 30% at difficulty "1", and the rest at difficulty "2".
 * `VERSION` The version of the software. Used in audio document definitions for cases where the schema changes.
 * `MIN_ANSWER_SIMILARITY` The program marks a given answer at the `/answer` `GET` endpoint as correct if the similarity between the answer and the correct answer exceeds this value.
 * `PROC_CONFIG` Configuration for the recording processor. Includes:

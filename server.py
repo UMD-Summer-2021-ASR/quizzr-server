@@ -87,7 +87,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "BLOB_NAME_LENGTH": 32,
         "Q_ENV": PROD_ENV_NAME,
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
-        "DIFFICULTY_LIMITS": [3, 6, None],
+        # "DIFFICULTY_LIMITS": [3, 6, None],
+        "DIFFICULTY_DIST": [0.6, 0.3, 0.1],
         "VERSION": "0.2.0",
         "MIN_ANSWER_SIMILARITY": 50,
         "PROC_CONFIG": {
@@ -168,9 +169,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     api = QuizzrAPISpec(os.path.join(server_dir, "reference", "backend.yaml"))
 
     app.config.from_mapping(app_conf)
+
+    # Validate configuration values
     if app.config["DEFAULT_LEADERBOARD_SIZE"] > app.config["MAX_LEADERBOARD_SIZE"]:
         app.logger.critical("Configured default leaderboard size must not exceed maximum leaderboard size.")
         exit(1)
+
+    for percentage in app.config["DIFFICULTY_DIST"]:
+        if not (0 <= percentage <= 1):
+            app.logger.critical("Configured DIFFICULTY_DIST percentages must be between 0 and 1.")
+            exit(1)
+
     app.logger.info("Finished configuring server instance")
 
     app.logger.info("Initializing third-party services...")
@@ -1734,15 +1743,49 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :param batch_size: The number of questions to retrieve
         :return: A dictionary containing a list of "results" and "errors"
         """
+        # if difficulty is not None:
+        #     difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], difficulty)
+        #     difficulty_query = {"recDifficulty": difficulty_query_op}
+        # else:
+        #     difficulty_query = {}
+        #
+        # query = {**difficulty_query, "qb_id": {"$exists": True}}
+        #
+        # cursor = qtpm.unrec_questions.find(query, {"qb_id": 1})
+
+        query = {
+            "qb_id": {"$exists": True},
+            "recDifficulty": {"$exists": True}
+        }
+
         if difficulty is not None:
-            difficulty_query_op = QuizzrTPM.get_difficulty_query_op(app.config["DIFFICULTY_LIMITS"], difficulty)
-            difficulty_query = {"recDifficulty": difficulty_query_op}
+            if difficulty > len(app.config["DIFFICULTY_DIST"]) - 1:
+                return _make_err_response(
+                    "Given difficulty type is too high",
+                    "invalid_arg",
+                    HTTPStatus.BAD_REQUEST,
+                    log_msg=True
+                )
+            skip_percent = 0
+            limit_percent = 0
+
+            for i in range(0, difficulty):
+                skip_percent += app.config["DIFFICULTY_DIST"][i]
+
+            for i in range(0, difficulty + 1):
+                limit_percent += app.config["DIFFICULTY_DIST"][i]
+
+            doc_count = qtpm.unrec_questions.count_documents(query)
+            skip = int(skip_percent * doc_count)
+            limit = int(limit_percent * doc_count)
+
+            _debug_variable("skip_percent", skip_percent)
+            _debug_variable("limit_percent", limit_percent)
         else:
-            difficulty_query = {}
+            skip, limit = 0, 0
 
-        query = {**difficulty_query, "qb_id": {"$exists": True}}
+        cursor = qtpm.unrec_questions.find(query, {"qb_id": 1}, skip=skip, limit=limit, sort=[("recDifficulty", pymongo.ASCENDING)])
 
-        cursor = qtpm.unrec_questions.find(query, {"qb_id": 1})
         question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
         if not question_ids:
             # app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
@@ -1763,6 +1806,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 "unrec_corrupt_questions",
                 HTTPStatus.NOT_FOUND
             )
+
         results = []
         for doc in next_questions:
             result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
