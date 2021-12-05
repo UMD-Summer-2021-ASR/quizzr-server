@@ -772,7 +772,35 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/downvote/<audio_id>", methods=["PATCH"])
     def downvote(audio_id):
+        """Downvote an audio recording."""
+        args = request.get_json()
+        uid = args["userId"]
+        if "userId" not in args:
+            return _make_err_response(
+                "Argument 'userId' is undefined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                log_msg=True
+            )
+
+        user = qtpm.users.find_one({"_id": uid})
+        rec_votes = user.get("recVotes") or []
+        has_voted = False
+        for i, rec_vote in enumerate(rec_votes):
+            if rec_vote["id"] == audio_id:
+                has_voted = True
+                if rec_vote["vote"] == -1:  # Avoid downvoting twice.
+                    return '', HTTPStatus.OK
+                else:
+                    qtpm.users.update_one({"_id": uid}, {"$set": {f"recVotes.{i}.vote": -1}})
+                    qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"upvotes": -1}})
+                    break
+
+        if not has_voted:
+            qtpm.users.update_one({"_id": uid}, {"$push": {"recVotes": {"id": audio_id, "vote": -1}}})
+
         result = qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"downvotes": 1}})
+
         if result.matched_count == 0:
             return _make_err_response(
                 f"Audio document with ID '{audio_id}' not found",
@@ -1841,7 +1869,35 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
     @app.route("/upvote/<audio_id>", methods=["PATCH"])
     def upvote(audio_id):
+        """Upvote an audio recording."""
+        args = request.get_json()
+        if "userId" not in args:
+            return _make_err_response(
+                "Argument 'userId' is undefined",
+                "undefined_arg",
+                HTTPStatus.BAD_REQUEST,
+                log_msg=True
+            )
+        uid = args["userId"]
+
+        user = qtpm.users.find_one({"_id": uid})
+        rec_votes = user.get("recVotes") or []
+        has_voted = False
+        for i, rec_vote in enumerate(rec_votes):
+            if rec_vote["id"] == audio_id:
+                has_voted = True
+                if rec_vote["vote"] == 1:  # Avoid upvoting twice.
+                    return '', HTTPStatus.OK
+                else:
+                    qtpm.users.update_one({"_id": uid}, {"$set": {f"recVotes.{i}.vote": 1}})
+                    qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"downvotes": -1}})
+                    break
+
+        if not has_voted:
+            qtpm.users.update_one({"_id": uid}, {"$push": {"recVotes": {"id": audio_id, "vote": 1}}})
+
         result = qtpm.audio.update_one({"_id": audio_id}, {"$inc": {"upvotes": 1}})
+
         if result.matched_count == 0:
             return _make_err_response(
                 f"Audio document with ID '{audio_id}' not found",

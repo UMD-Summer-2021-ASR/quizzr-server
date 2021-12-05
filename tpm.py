@@ -555,7 +555,9 @@ class QuizzrTPM:
             "recordedAudios": [],
             "permLevel": "normal",
             "playTime": 0,
-            "creationDate": datetime.now().isoformat()}
+            "creationDate": datetime.now().isoformat(),
+            "recVotes": []
+        }
         return self.users.insert_one(profile)
 
     def modify_profile(self, user_id: str, update_args: Dict[str, Any]):
