@@ -8,7 +8,7 @@ Prior to installing the server, either through Docker (see [Using Docker](#Using
 * Python 3.8 with the latest version of `pip` installed (does not apply with Docker).
 * A MongoDB Atlas with the following (see [Get Started with Atlas](https://docs.atlas.mongodb.com/getting-started/), parts 1-5, for more information):
   * An Atlas account; 
-  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "RecordedQuestions", "UnrecordedQuestions", and "Users" collections, all of which are not capped;
+  * A cluster on version 4.4.x with a database that contains the "UnprocessedAudio", "Audio", "RecordedQuestions", "UnrecordedQuestions", "Games", and "Users" collections, all of which are not capped;
   * A database user with permission to read and write to all collections in the database; and
   * A connection through the database user with a Python driver version 3.6 or later.
 * A Firebase project with the Cloud Storage service enabled and a connection to the project through an Admin SDK set up (see [Cloud Storage for Firebase](https://firebase.google.com/docs/storage/#implementation_path) and [Add the Firebase Admin SDK to your server](https://firebase.google.com/docs/admin/setup) respectively for more information).
