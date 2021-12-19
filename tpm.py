@@ -5,6 +5,7 @@ import pprint
 import random
 from copy import deepcopy
 from datetime import datetime
+from itertools import chain
 from typing import Dict, Any, List, Tuple, Optional, Union
 # from secrets import token_urlsafe
 from uuid import uuid4
@@ -295,29 +296,24 @@ class QuizzrTPM:
         self.logger.info(f"Found {rec_count} recorded question(s)")
 
     def pick_random_question(self,
-                             collection_name: str,
                              question_ids: List[int],
                              required_fields: List[str]):
         """
         Pick a random question from a list of question IDs and find it. Alias for ``pick_random_questions`` without a
         ``batch_size`` argument.
 
-        :param collection_name: The name of the collection to retrieve the question from
         :param question_ids: The list of question IDs to select from
         :param required_fields: Require these fields to be present in the returned document.
         :return: A randomly selected question
         """
-        return self.pick_random_questions(collection_name, question_ids, required_fields)
+        return self.pick_random_questions(question_ids, required_fields)
 
-    def pick_random_questions(self,
-                              collection_name: str,
-                              question_ids: List[int],
+    def pick_random_questions(self, question_ids: List[int],
                               required_fields: List[str],
                               batch_size: int = 1):
         """
         Search for multiple questions from a shuffled list of question IDs.
 
-        :param collection_name: The name of the collection to retrieve the questions from
         :param question_ids: The list of question IDs to select from
         :param required_fields: Require these fields to be present in the returned documents.
         :param batch_size: The number of questions to retrieve
@@ -337,7 +333,10 @@ class QuizzrTPM:
                 qids_pool = []
             self._debug_variable("next_id_batch", next_id_batch)
             self._debug_variable("qids_pool", qids_pool)
-            questions_cursor = self.database.get_collection(collection_name).find({"qb_id": {"$in": next_id_batch}})
+            questions_cursor = chain(
+                self.unrec_questions.find({"qb_id": {"$in": next_id_batch}}),
+                self.rec_questions.find({"qb_id": {"$in": next_id_batch}})
+            )
             found = set()
             for doc in questions_cursor:
                 self._debug_variable("doc", doc)

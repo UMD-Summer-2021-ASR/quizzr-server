@@ -11,6 +11,7 @@ import re
 import string
 import time
 from copy import deepcopy
+from itertools import chain
 from sys import exit
 from datetime import datetime, timedelta
 from http import HTTPStatus
@@ -1759,6 +1760,31 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         #
         # cursor = qtpm.unrec_questions.find(query, {"qb_id": 1})
 
+        def _get_difficulty_bounds(collection: str, difficulty: int, query: dict) -> Tuple[int, int]:
+            """
+            Get the boundaries from the configured difficulty distribution for the given difficulty.
+
+            Assumes that the documents to find are sorted in ascending order by ``recDifficulty``.
+
+            :param collection: The collection to look in
+            :param difficulty: An integer representing the index of the configured difficulty distribution
+            :param query: The MongoDB filter to use when scaling the distribution percentages to the number of
+                          documents.
+            :return: A tuple containing the number of documents to skip and the number of documents to stop at
+            """
+            skip_percent = 0
+            limit_percent = 0
+            for i in range(0, difficulty):
+                skip_percent += app.config["DIFFICULTY_DIST"][i]
+            for i in range(0, difficulty + 1):
+                limit_percent += app.config["DIFFICULTY_DIST"][i]
+            doc_count = qtpm.database.get_collection(collection).count_documents(query)
+            skip = int(skip_percent * doc_count)
+            limit = int(limit_percent * doc_count)
+            _debug_variable("skip_percent", skip_percent)
+            _debug_variable("limit_percent", limit_percent)
+            return skip, limit
+
         query = {
             "qb_id": {"$exists": True},
             "recDifficulty": {"$exists": True}
@@ -1772,52 +1798,47 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                     HTTPStatus.BAD_REQUEST,
                     log_msg=True
                 )
-            skip_percent = 0
-            limit_percent = 0
-
-            for i in range(0, difficulty):
-                skip_percent += app.config["DIFFICULTY_DIST"][i]
-
-            for i in range(0, difficulty + 1):
-                limit_percent += app.config["DIFFICULTY_DIST"][i]
-
-            doc_count = qtpm.unrec_questions.count_documents(query)
-            skip = int(skip_percent * doc_count)
-            limit = int(limit_percent * doc_count)
-
-            _debug_variable("skip_percent", skip_percent)
-            _debug_variable("limit_percent", limit_percent)
+            skip_unrec, limit_unrec = _get_difficulty_bounds("UnrecordedQuestions", difficulty, query)
+            skip_rec, limit_rec = _get_difficulty_bounds("RecordedQuestions", difficulty, query)
         else:
-            skip, limit = 0, 0
+            skip_unrec, limit_unrec = 0, 0
+            skip_rec, limit_rec = 0, 0
 
         # Get IDs for unrecorded questions
-        cursor = qtpm.unrec_questions.find(query, {"qb_id": 1}, skip=skip, limit=limit, sort=[("recDifficulty", pymongo.ASCENDING)])
+        unrec_cursor = qtpm.unrec_questions.find(
+            query, {"qb_id": 1},
+            skip=skip_unrec, limit=limit_unrec, sort=[("recDifficulty", pymongo.ASCENDING)]
+        )
 
-        question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
+        rec_cursor = qtpm.rec_questions.find(
+            query, {"qb_id": 1},
+            skip=skip_rec, limit=limit_rec, sort=[("recDifficulty", pymongo.ASCENDING)]
+        )
+
+        question_ids = list({doc["qb_id"] for doc in chain(unrec_cursor, rec_cursor)})  # Ensure no duplicates are present
         if not question_ids:
             # app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
             # return "unrec_empty_qids", HTTPStatus.NOT_FOUND
             return _make_err_response(
-                f"No unrecorded questions found for difficulty type '{difficulty}'",
-                "unrec_empty_qids",
+                f"No questions found for difficulty type '{difficulty}'",
+                "empty_qids",
                 HTTPStatus.NOT_FOUND,
                 log_msg=True
             )
 
         # Pick some questions from the found IDs
-        next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
-                                                            ["transcript"], batch_size)
+        next_questions, errors = qtpm.pick_random_questions(question_ids, ["transcript"], batch_size)
         if next_questions is None:
             # return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
             return _make_err_response(
-                "No valid unrecorded questions found",
-                "unrec_corrupt_questions",
+                "No valid questions found",
+                "corrupt_questions",
                 HTTPStatus.NOT_FOUND
             )
 
         results = []
         for doc in next_questions:
-            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"]}
+            result_doc = {"id": doc["qb_id"], "transcript": doc["transcript"], "recorded": bool(doc.get("recordings"))}
             if "sentenceId" in doc:
                 result_doc["sentenceId"] = doc["sentenceId"]
             if "tokenizations" in doc:
