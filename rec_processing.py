@@ -10,6 +10,7 @@ import sys
 import time
 import wave
 from typing import List, Dict, Union
+from uuid import uuid4
 
 import bson.json_util
 from pymongo.database import Database
@@ -254,7 +255,9 @@ class QuizzrProcessor:
             # for submission in typed_submissions['normal']:
             for submission, result in results:
                 if type(submission) is list:
+                    batch_uuid = str(uuid4())
                     for i, batch_item in enumerate(submission):
+                        sub2meta[batch_item]["batchUUID"] = batch_uuid
                         if "err" in result:
                             if result["submissionName"] == batch_item:
                                 final_results[batch_item] = {"case": "err", "err": result["err"]}
@@ -294,7 +297,7 @@ class QuizzrProcessor:
                         num_accepted_submissions += 1
             self.logger.debug(f"final_results = {pprint.pformat(final_results)}")
 
-            # NOTE: This number is currently inaccurate with batch submissions.
+            # FIXME: This number is currently inaccurate with batch submissions.
             self.logger.info(f"Accepted {num_accepted_submissions} of {len(typed_submissions['normal'])} submission(s)")
 
         if "buzz" in typed_submissions:
@@ -328,7 +331,7 @@ class QuizzrProcessor:
         :return: A dictionary mapping submissions to results, which contain either an "accuracy" and "vtt" key or an
                  "err" key.
         """
-        # TODO: Make pre-screening of multiple submissions happen in parallel / asynchronously.
+        # TODO: Make pre-screening of multiple submissions happen in parallel / asynchronously (benchmark first).
         #   Parallel = multiprocessing.Pool
         #   Asynchronous = asyncio
         # TODO: Add timeout as a workaround to forced alignments sometimes blocking indefinitely.

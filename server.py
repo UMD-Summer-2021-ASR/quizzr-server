@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import pprint
 import queue
+import random
 import re
 import string
 import time
@@ -84,7 +85,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         "UNPROC_FIND_LIMIT": 32,
         "DATABASE": "QuizzrDatabase",
         "BLOB_ROOT": "production",
-        "BLOB_NAME_LENGTH": 32,
+        # "BLOB_NAME_LENGTH": 32,
         "Q_ENV": PROD_ENV_NAME,
         "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
         # "DIFFICULTY_LIMITS": [3, 6, None],
@@ -1694,31 +1695,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 'as': 'audio',
                 'let': {'qb_id': '$_id'},
                 'pipeline': [
-                    {'$match': {'$expr': {'$eq': ['$qb_id', '$$qb_id']}, 'recType': 'normal'}},
-                    {'$set': {'totalScore': {'$add': ['$score.wer', '$score.mer', '$score.wil']}}},
-                    {'$sort': {'totalScore': 1}},
-                    {'$group': {
-                        '_id': {'userId': '$userId', 'sentenceId': '$sentenceId', 'tokenizationId': '$tokenizationId'},
-                        'id': {'$first': '$_id'},
-                        'vtt': {'$first': '$vtt'},
-                        'gentleVtt': {'$first': '$gentleVtt'},
-                        'lowestScore': {'$first': '$totalScore'}
-                    }},
-                    {'$group': {
-                        '_id': '$_id.userId',
-                        'netScore': {'$sum': '$lowestScore'},
-                        'audio': {'$push': {
-                            'id': '$id',
-                            'sentenceId': '$_id.sentenceId',
-                            'tokenizationId': '$_id.tokenizationId',
-                            'vtt': '$vtt',
-                            'gentleVtt': '$gentleVtt'
-                        }}
-                    }},
-                    {'$sort': {'netScore': 1}},
-                    {'$limit': 1},
-                    {'$unwind': {'path': '$audio'}},
-                    {'$replaceRoot': {'newRoot': '$audio'}}
+                    {'$match': {'$expr': {'$eq': ['$qb_id', '$$qb_id']}, 'recType': 'normal'}}
                 ]
             }}
         ]
@@ -1736,6 +1713,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         questions = []
         for doc in cursor:
             doc["qb_id"] = doc.pop("_id")
+            doc["audio"] = _pick_audio(doc["audio"])
             questions.append(doc)
         if not questions:
             return _make_err_response(
@@ -1812,6 +1790,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         else:
             skip, limit = 0, 0
 
+        # Get IDs for unrecorded questions
         cursor = qtpm.unrec_questions.find(query, {"qb_id": 1}, skip=skip, limit=limit, sort=[("recDifficulty", pymongo.ASCENDING)])
 
         question_ids = list({doc["qb_id"] for doc in cursor})  # Ensure no duplicates are present
@@ -1825,6 +1804,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 log_msg=True
             )
 
+        # Pick some questions from the found IDs
         next_questions, errors = qtpm.pick_random_questions("UnrecordedQuestions", question_ids,
                                                             ["transcript"], batch_size)
         if next_questions is None:
@@ -2252,6 +2232,48 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         if extra:
             response["extra"] = extra
         return response, status_code
+
+    def _pick_audio(recs: list):
+        weights = []
+        rec_choices = []  # Segmented recordings are treated as one item
+        for rec in recs:
+            if "sentenceId" not in rec or rec["sentenceId"] == 0 or "tokenizationId" not in rec or rec["tokenizationId"] == 0:
+                rec_choices.append(rec)
+
+        for rec in rec_choices:
+            upvotes = rec.get("upvotes") or 0
+            downvotes = rec.get("downvotes") or 0
+
+            if downvotes == 0 or upvotes == 0:
+                weight = 1.0
+            else:
+                weight = upvotes / downvotes
+
+            weights.append(weight)
+
+        selected = random.choices(rec_choices, weights=weights, k=1)
+        if "batchUUID" in selected[0]:  # Retrieve the other segments if it is segmented
+            batch_uuid = selected[0]["batchUUID"]
+            for rec in recs:
+                if rec.get("batchUUID") == batch_uuid and rec != selected[0]:
+                    selected.append(rec)
+
+        selected_final = []
+        for rec in selected:
+            rec_final = {
+                "id": rec["_id"],
+                "gentleVtt": rec["gentleVtt"],
+            }
+
+            if "vtt" in rec:
+                rec_final["vtt"] = rec["vtt"]
+            if "sentenceId" in rec:
+                rec_final["sentenceId"] = rec["sentenceId"]
+            if "tokenizationId" in rec:
+                rec_final["tokenizationId"] = rec["tokenizationId"]
+
+            selected_final.append(rec_final)
+        return selected_final
 
     return app
 

@@ -6,7 +6,8 @@ import random
 from copy import deepcopy
 from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional, Union
-from secrets import token_urlsafe
+# from secrets import token_urlsafe
+from uuid import uuid4
 
 import pymongo
 from pymongo import UpdateOne
@@ -426,7 +427,8 @@ class QuizzrTPM:
         upload_count = 0
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
-            blob_name = token_urlsafe(self.config["BLOB_NAME_LENGTH"])
+            # blob_name = token_urlsafe(self.config["BLOB_NAME_LENGTH"])
+            blob_name = str(uuid4())
             blob_path = self.get_blob_path(blob_name, subdir)
             blob = self.bucket.blob(blob_path)
             blob.upload_from_filename(file_path)
