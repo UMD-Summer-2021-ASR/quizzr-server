@@ -1099,6 +1099,8 @@ paths:
                                 $ref: '#/components/schemas/Audio-Id'
                               sentenceId:
                                 type: integer
+                              tokenizationId:
+                                type: integer
                               gentleVtt:
                                 $ref: '#/components/schemas/VTT'
                               vtt:
