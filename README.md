@@ -32,7 +32,6 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `UNPROC_FIND_LIMIT` The maximum number of unprocessed audio documents to find in a single batch.
 * `DATABASE` The name of the database to use in MongoDB.
 * `BLOB_ROOT` The name of the root folder to use in Firebase Storage.
-* `BLOB_NAME_LENGTH` The length of the string to generate when naming uploaded audio files.
 * `Q_ENV` The type of environment to use. A value of `development` or `testing` makes the server identify unauthenticated users as `dev` and allows access to the `/uploadtest` endpoint.
 * `SUBMISSION_FILE_TYPES` The file extensions to look for when deleting submissions.
 * `DIFFICULTY_DIST` The fractional distribution of recordings by difficulty. Example: `[0.6, 0.3, 0.1]` makes the 60% least difficult recordings have a "0" difficulty, followed by the next 30% at difficulty "1", and the rest at difficulty "2".
@@ -51,6 +50,7 @@ Creating a JSON file named `sv_config.json` in the `config` subdirectory of the 
 * `DEFAULT_LEADERBOARD_SIZE` The default number of entries on the leaderboard.
 * `MAX_USERNAME_LENGTH` The maximum allowable number of characters in a username.
 * `USERNAME_CHAR_SET` A string containing all allowable characters in a username.
+* `DEFAULT_RATE_LIMITS` An array containing request rate limits (in a string format) for all server endpoints. Examples: "200 per day", "50 per hour", "1/second"
 
 It is also possible to override configuration fields through environment variables or through a set of overrides passed into the `test_overrides` argument for the app factory function. Currently, overrides with environment variables only work with fields that have string values.
 
@@ -61,10 +61,9 @@ The following JSON data shows the default values of each configuration field. Yo
   "UNPROC_FIND_LIMIT": 32,
   "DATABASE": "QuizzrDatabase",
   "BLOB_ROOT": "production",
-  "BLOB_NAME_LENGTH": 32,
   "Q_ENV": "production",
   "SUBMISSION_FILE_TYPES": ["wav", "json", "vtt"],
-  "DIFFICULTY_LIMITS": [3, 6, null],
+  "DIFFICULTY_DIST": [0.6, 0.3, 0.1],
   "VERSION": "0.2.0",
   "MIN_ANSWER_SIMILARITY": 50,
   "PROC_CONFIG": {
@@ -85,7 +84,7 @@ The following JSON data shows the default values of each configuration field. Yo
       "collection": "Users"
     },
     "private": {
-      "projection": {"_id": 0},
+      "projection": null,
       "collection": "Users"
     }
   },
@@ -93,7 +92,8 @@ The following JSON data shows the default values of each configuration field. Yo
   "MAX_LEADERBOARD_SIZE": 200,
   "DEFAULT_LEADERBOARD_SIZE": 10,
   "MAX_USERNAME_LENGTH": 16,
-  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  "USERNAME_CHAR_SET": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+  "DEFAULT_RATE_LIMITS": []
 }
 ```
 
@@ -113,8 +113,7 @@ $ python3 server.py
 You can view the website through http://127.0.0.1:5000/. \
 Stop the server using Ctrl + C.
 
-To run the server in debug mode, set `FLASK_ENV` to `development` in the terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.\
-Note: Due to limitations, the server will not restart the pre-screening subprocess if the debugger is enabled.
+To run the server in debug mode, set `FLASK_ENV` to `development` in the terminal. By default, the debugger is enabled. To disable the debugger, add `--no-debugger` to the run command.
 
 ### Testing
 There is a separate repository for running automated tests on the server. See the [quizzr-server-test](https://github.com/UMD-Summer-2021-ASR/quizzr-server-test) repository for more information.
@@ -139,6 +138,9 @@ Notes:
 The following contains potential problems you may encounter while installing or running this server:
 * The installation execution for Gentle fails due to the certificate expiring: Modify the `wget` command in `install_models.sh` to include the `--no-check-certificate` flag.
 * The execution for installing Gentle fails to create `kaldi.mk`: Run `./configure --enable-static`, `make`, and `make install` in `gentle/ext/kaldi/tools/openfst`. Then, run `install.sh` again.
+
+## Batch UUID Issues
+A recent update has added the requirement for a `batchUUID` field in segmented audio documents. A script has been added in the [maintenance](maintenance) folder to retroactively add this field to old audio documents.
 
 ## Endpoints
 All documentation for the endpoints has been moved to [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.
