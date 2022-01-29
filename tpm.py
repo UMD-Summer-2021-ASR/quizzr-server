@@ -462,7 +462,9 @@ class QuizzrTPM:
             self,
             sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
-            sub2vtt: Dict[str, str]) -> Tuple[InsertManyResult, InsertManyResult]:
+            sub2vtt: Dict[str, str],
+            sub2score: Dict[str, Dict[str, float]]
+    ) -> Tuple[InsertManyResult, InsertManyResult]:
         """
         Upload submission metadata to MongoDB.
 
@@ -470,6 +472,7 @@ class QuizzrTPM:
         :param sub2meta: A dictionary mapping submissions to metadata to use. Fields that start with '__' are not
                          included.
         :param sub2vtt: A dictionary mapping submissions to VTTs.
+        :param sub2score: A dictionary mapping submissions to ASR scores.
         :return: A tuple containing the results from inserting to the Audio and UnprocessedAudio collections
                  respectively.
         """
@@ -489,6 +492,7 @@ class QuizzrTPM:
                     entry[k] = v
             if metadata["recType"] in processing_list:
                 entry["gentleVtt"] = sub2vtt[submission]
+                entry["score"] = sub2score[submission]
             if metadata["recType"] not in processing_list:
                 audio_batch.append(entry)
                 if metadata["userId"] not in uid2rec_docs:
