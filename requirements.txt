@@ -1,5 +1,4 @@
 attrs==21.2.0
-audio-evaluator==1.0.6
 CacheControl==0.12.6
 cachetools==4.2.2
 certifi==2021.5.30
@@ -31,12 +30,10 @@ iniconfig==1.1.1
 isodate==0.6.0
 itsdangerous==2.0.1
 Jinja2==3.0.1
-jiwer==2.3.0
 jsonschema==3.2.0
 limits==1.5.1
 MarkupSafe==2.0.1
 msgpack==1.0.2
-numpy==1.22.1
 oauthlib==3.1.1
 openapi-schema-validator==0.1.5
 packaging==20.9
@@ -58,9 +55,6 @@ requests-oauthlib==1.3.0
 rsa==4.7.2
 six==1.16.0
 toml==0.10.2
-torch==1.10.0
-torchaudio==0.10.0
-typing-extensions==4.0.1
 uritemplate==3.0.1
 urllib3==1.26.5
 Werkzeug==2.0.1
