@@ -198,10 +198,6 @@ class QuizzrProcessorHead:
             sub2score=sub2score
         )
 
-        # Temp solution
-        for audio_id in sub2blob.values():
-            self.qtpm.update_processed_audio({"_id": audio_id})
-
         # Get summary and remove submissions
         summary = []
 
