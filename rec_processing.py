@@ -12,7 +12,7 @@ import wave
 from typing import List, Dict, Union
 from uuid import uuid4
 
-import audioevaluator.evaluator
+# import audioevaluator.evaluator
 import bson.json_util
 from pymongo.database import Database
 
@@ -199,8 +199,8 @@ class QuizzrProcessorHead:
         )
 
         # Temp solution
-        # for audio_id in sub2blob.values():
-        #     self.qtpm.update_processed_audio({"_id": audio_id})
+        for audio_id in sub2blob.values():
+            self.qtpm.update_processed_audio({"_id": audio_id})
 
         # Get summary and remove submissions
         summary = []
@@ -467,7 +467,9 @@ class QuizzrProcessor:
             return {"err": "runtime_error", "extra": str(e)}
 
         # Get WER, MER, and WIL from an automatic speech recognizer
-        asr_score = audioevaluator.evaluator.evaluate_audio(wav_file_path, r_transcript)
+        # FIXME: PyTorch has issues when working with CUDA and forked processes at the same time
+        # asr_score = audioevaluator.evaluator.evaluate_audio(wav_file_path, r_transcript)
+        asr_score = {}
 
         return {"accuracyFraction": (aligned_words, num_words), "vtt": vtt, "score": asr_score}
         # return {"accuracyFraction": (aligned_words, num_words), "vtt": vtt, "score": {"wer": 0, "mer": 0, "wil": 0}}
