@@ -150,6 +150,23 @@ class QuizzrTPM:
                 self.logger.warning(f"Could not update question with ID {qid}")
                 return "internal_error", "question_update_failure"
 
+    def add_recs_to_questions(self, qid2rec_docs: Dict[int, List[dict]]):
+        """
+        Push multiple recording documents to the ``"recordedAudios"`` field of each user.
+
+        :param qid2rec_docs: A dictionary mapping a question ID to the recording documents to append
+        :return: An array of tuples each containing the type of error and the reason
+        """
+        errs = []
+
+        for qid, rec_docs in qid2rec_docs.items():
+            for rec_doc in rec_docs:
+                err = self.add_rec_to_question(qid, rec_doc)
+                if err:
+                    errs.append(err)
+
+        return errs
+
     def add_rec_to_user(self, user_id: str, rec_doc: dict) -> Optional[Tuple[str, str]]:
         """
         Push one recording document to the ``"recordedAudios"`` field of one user.
@@ -185,6 +202,7 @@ class QuizzrTPM:
             for rec_doc in rec_docs:
                 update_batch.append(UpdateOne({"_id": user_id}, {"$push": {"recordedAudios": rec_doc}}))
         results = self.users.bulk_write(update_batch)
+        # FIXME: Message does not count the number of user documents updated, rather the number of successful updates.
         self.logger.info(f"Successfully updated {results.matched_count} of {len(uid2rec_docs)} user documents")
         missed_results = len(uid2rec_docs) - results.matched_count
         # if missed_results == 1:
@@ -433,6 +451,7 @@ class QuizzrTPM:
             blob.upload_from_filename(file_path)
             file2blob[file_name] = blob_name
             self.logger.debug(f"{upload_count}/{len(file_paths)}")
+            upload_count += 1
 
         return file2blob
 
@@ -462,7 +481,9 @@ class QuizzrTPM:
             self,
             sub2blob: Dict[str, str],
             sub2meta: Dict[str, Dict[str, Any]],
-            sub2vtt: Dict[str, str]) -> Tuple[InsertManyResult, InsertManyResult]:
+            sub2vtt: Dict[str, str],
+            sub2score: Dict[str, Dict[str, float]]
+    ) -> Tuple[InsertManyResult, InsertManyResult]:
         """
         Upload submission metadata to MongoDB.
 
@@ -470,13 +491,15 @@ class QuizzrTPM:
         :param sub2meta: A dictionary mapping submissions to metadata to use. Fields that start with '__' are not
                          included.
         :param sub2vtt: A dictionary mapping submissions to VTTs.
+        :param sub2score: A dictionary mapping submissions to ASR scores.
         :return: A tuple containing the results from inserting to the Audio and UnprocessedAudio collections
                  respectively.
         """
         processing_list = ["normal"]
-        unproc_audio_batch = []
-        audio_batch = []
+        question_audio_batch = []
+        other_audio_batch = []
         uid2rec_docs = {}
+        qid2rec_docs = {}
         self.logger.info("Preparing document entries...")
         for submission, audio_id in sub2blob.items():
             entry = {
@@ -489,33 +512,41 @@ class QuizzrTPM:
                     entry[k] = v
             if metadata["recType"] in processing_list:
                 entry["gentleVtt"] = sub2vtt[submission]
+                entry["score"] = sub2score[submission]
+                # TODO: Support for questions segmented into multiple documents
+                if metadata["qb_id"] not in qid2rec_docs:
+                    qid2rec_docs[metadata["qb_id"]] = []
+                qid2rec_docs[metadata["qb_id"]].append({"id": audio_id, "recType": metadata["recType"]})
             if metadata["recType"] not in processing_list:
-                audio_batch.append(entry)
-                if metadata["userId"] not in uid2rec_docs:
-                    uid2rec_docs[metadata["userId"]] = []
-                uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
+                other_audio_batch.append(entry)
             else:
-                unproc_audio_batch.append(entry)
+                question_audio_batch.append(entry)
+
+            if metadata["userId"] not in uid2rec_docs:
+                uid2rec_docs[metadata["userId"]] = []
+            uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
+
             self._debug_variable("entry", entry)
 
-        self._debug_variable("unproc_audio_batch", unproc_audio_batch)
-        self._debug_variable("audio_batch", audio_batch)
+        self._debug_variable("question_audio_batch", question_audio_batch)
+        self._debug_variable("other_audio_batch", other_audio_batch)
 
-        if not unproc_audio_batch:
-            self.logger.info("No documents to insert into the UnprocessedAudio collection. Skipping")
-            unproc_results = None
+        if not question_audio_batch:
+            self.logger.info("No question recordings to insert into the Audio collection. Skipping")
+            question_rec_results = None
         else:
-            unproc_results = self.unproc_audio.insert_many(unproc_audio_batch)
-            self.logger.info(f"Inserted {len(unproc_results.inserted_ids)} document(s) into the UnprocessedAudio collection")
+            question_rec_results = self.audio.insert_many(question_audio_batch)
+            self.add_recs_to_questions(qid2rec_docs)
+            self.logger.info(f"Inserted {len(question_rec_results.inserted_ids)} question recording(s) into the Audio collection")
 
-        if not audio_batch:
-            self.logger.info("No documents to insert into the Audio collection. Skipping")
+        if not other_audio_batch:
+            self.logger.info("No buzz or answer recordings to insert into the Audio collection. Skipping")
             proc_results = None
         else:
-            proc_results = self.audio.insert_many(audio_batch)
-            self.logger.info(f"Inserted {len(proc_results.inserted_ids)} document(s) into the Audio collection")
-            self.add_recs_to_users(uid2rec_docs)
-        return unproc_results, proc_results
+            proc_results = self.audio.insert_many(other_audio_batch)
+            self.logger.info(f"Inserted {len(proc_results.inserted_ids)} buzz and/or answer recording(s) into the Audio collection")
+        self.add_recs_to_users(uid2rec_docs)
+        return question_rec_results, proc_results
 
     def get_profile(self, user_id: str, visibility: str) -> Optional[dict]:
         """

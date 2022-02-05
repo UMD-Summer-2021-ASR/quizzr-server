@@ -12,6 +12,7 @@ import wave
 from typing import List, Dict, Union
 from uuid import uuid4
 
+# import audioevaluator.evaluator
 import bson.json_util
 from pymongo.database import Database
 
@@ -177,19 +178,24 @@ class QuizzrProcessorHead:
 
         sub2meta = {}
         sub2vtt = {}
+        sub2score = {}
 
         for submission in results:
             doc = results[submission]
             if doc["case"] == "accepted":
                 sub2meta[submission] = doc["metadata"]
                 if "vtt" in doc:
-                    sub2vtt[submission] = doc.get("vtt")
+                    sub2vtt[submission] = doc["vtt"]
+                if "score" in doc:
+                    sub2score[submission] = doc["score"]
 
         # Upload submission metadata to MongoDB
+        sub2blob = {os.path.splitext(file)[0]: file2blob[file] for file in file2blob}
         self.qtpm.mongodb_insert_submissions(
-            sub2blob={os.path.splitext(file)[0]: file2blob[file] for file in file2blob},
+            sub2blob=sub2blob,
             sub2meta=sub2meta,
-            sub2vtt=sub2vtt
+            sub2vtt=sub2vtt,
+            sub2score=sub2score
         )
 
         # Get summary and remove submissions
@@ -273,6 +279,7 @@ class QuizzrProcessor:
                             final_results[batch_item] = {
                                 "case": "accepted",
                                 "vtt": result["vtt"][i],
+                                "score": result["score"][i],
                                 "metadata": sub2meta[batch_item],
                                 "accuracy": result["accuracy"]
                             }
@@ -290,6 +297,7 @@ class QuizzrProcessor:
                         final_results[submission] = {
                             "case": "accepted",
                             "vtt": result["vtt"],
+                            "score": result["score"],
                             "metadata": sub2meta[submission],
                             "accuracy": result["accuracy"]
                         }
@@ -328,8 +336,8 @@ class QuizzrProcessor:
         :param submissions: The list of submissions to process
         :param sub2meta: A dictionary mapping submissions to metadata, which must contain the qb_id and should contain
                          either a sentenceId or a tokenizationId
-        :return: A dictionary mapping submissions to results, which contain either an "accuracy" and "vtt" key or an
-                 "err" key.
+        :return: A dictionary mapping submissions to results, which contain either an "accuracy", "score", and "vtt" key
+                 or an "err" key.
         """
         # TODO: Make pre-screening of multiple submissions happen in parallel / asynchronously (benchmark first).
         #   Parallel = multiprocessing.Pool
@@ -343,6 +351,7 @@ class QuizzrProcessor:
             if type(submission) is list:
                 total_accuracy_fraction = [0, 0]
                 vtt_list = []
+                score_list = []
                 batch_has_error = False
                 for batch_item in submission:
                     if batch_item not in sub2meta:
@@ -359,6 +368,7 @@ class QuizzrProcessor:
                     total_accuracy_fraction[0] += result["accuracyFraction"][0]
                     total_accuracy_fraction[1] += result["accuracyFraction"][1]
                     vtt_list.append(result["vtt"])
+                    score_list.append(result["score"])
 
                 if batch_has_error:
                     continue
@@ -366,7 +376,8 @@ class QuizzrProcessor:
                 accuracy = total_accuracy_fraction[0] / total_accuracy_fraction[1]
                 results.append((submission, {
                     "accuracy": accuracy,
-                    "vtt": vtt_list
+                    "vtt": vtt_list,
+                    "score": score_list
                 }))
             else:
                 if submission not in sub2meta:
@@ -381,7 +392,7 @@ class QuizzrProcessor:
 
                 # noinspection PyUnresolvedReferences
                 accuracy = result["accuracyFraction"][0] / result["accuracyFraction"][1]
-                results.append((submission, {"accuracy": accuracy, "vtt": result["vtt"]}))
+                results.append((submission, {"accuracy": accuracy, "vtt": result["vtt"], "score": result["score"]}))
 
             num_finished_submissions += 1
 
@@ -395,8 +406,8 @@ class QuizzrProcessor:
 
         :param submission: The name of the submission to pre-screen
         :param metadata: The metadata associated with the submission
-        :return: A dictionary containing the "accuracyFraction" (a tuple representing the accuracy as a fraction) and
-                 the alignment as a "vtt"
+        :return: A dictionary containing the "accuracyFraction" (a tuple representing the accuracy as a fraction), the
+                 alignment as a "vtt", and the "score" (the "wer", "mer", and "wil" all in one variable)
         """
         file_path = os.path.join(self.DIRECTORY, submission)
         wav_file_path = file_path + ".wav"
@@ -451,7 +462,13 @@ class QuizzrProcessor:
             self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
             return {"err": "runtime_error", "extra": str(e)}
 
-        return {"accuracyFraction": (aligned_words, num_words), "vtt": vtt}
+        # Get WER, MER, and WIL from an automatic speech recognizer
+        # FIXME: PyTorch has issues when working with CUDA and forked processes at the same time
+        # asr_score = audioevaluator.evaluator.evaluate_audio(wav_file_path, r_transcript)
+        asr_score = {}
+
+        return {"accuracyFraction": (aligned_words, num_words), "vtt": vtt, "score": asr_score}
+        # return {"accuracyFraction": (aligned_words, num_words), "vtt": vtt, "score": {"wer": 0, "mer": 0, "wil": 0}}
 
     # ****************** HELPER METHODS *********************
     def get_accuracy_and_vtt(self, file_path: str, r_transcript: str):
@@ -472,6 +489,7 @@ class QuizzrProcessor:
                 aligned_words += 1
         realigned_alignment = vtt_conversion.realign_alignment(alignment)
         vtt = vtt_conversion.gentle_alignment_to_vtt(realigned_alignment.words)
+        # self.logger.debug(f"vtt = {vtt}")
 
         return aligned_words, total_words, vtt
 
