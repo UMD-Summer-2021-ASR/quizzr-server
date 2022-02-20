@@ -143,4 +143,5 @@ The following contains potential problems you may encounter while installing or 
 A recent update has added the requirement for a `batchUUID` field in segmented audio documents. A script has been added in the [maintenance](maintenance) folder to retroactively add this field to old audio documents.
 
 ## Endpoints
+NOTICE: Endpoint documentation will no longer be maintained until this software exits initial development.
 All documentation for the endpoints has been moved to [reference/backend.yaml](reference/backend.yaml), which is in an OpenAPI format. You can view it with the [Swagger UI](https://swagger.io/tools/swagger-ui/) or a similar OpenAPI GUI generator.

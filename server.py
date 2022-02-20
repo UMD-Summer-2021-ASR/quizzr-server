@@ -1365,24 +1365,10 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :param audio_id: The ID of the document in the Audio collection
         :return: A response containing the VTT as an octet stream
         """
-
-        type_arg = request.args.get("t") or "normal"
-        if type_arg == "gentle":
-            field_name = "gentleVtt"
-        elif type_arg == "normal":
-            field_name = "vtt"
-        else:
-            app.logger.error(f"No such VTT type '{type_arg}'. Aborting")
-            return _make_err_response(
-                f"No such VTT type '{type_arg}'. Valid types: {', '.join(['gentle', 'normal'])}",
-                "invalid_arg",
-                HTTPStatus.INTERNAL_SERVER_ERROR,
-                ["t", type_arg]
-            )
-        audio_doc = qtpm.audio.find_one({"_id": audio_id}, {field_name: 1})
-        if audio_doc is None or audio_doc.get(field_name) is None:
+        audio_doc = qtpm.audio.find_one({"_id": audio_id}, {"vtt": 1})
+        if audio_doc is None or audio_doc.get("vtt") is None:
             abort(HTTPStatus.NOT_FOUND)
-        response = make_response(bytes(audio_doc[field_name], "utf-8"))
+        response = make_response(bytes(audio_doc["vtt"], "utf-8"))
         response.headers["Content-Type"] = "application/octet-stream"
         return response
 
