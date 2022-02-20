@@ -2269,11 +2269,11 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         for rec in selected:
             rec_final = {
                 "id": rec["_id"],
-                "gentleVtt": rec["gentleVtt"],
+                "vtt": rec["vtt"],
             }
 
-            if "vtt" in rec:
-                rec_final["vtt"] = rec["vtt"]
+            if "oldVtt" in rec:
+                rec_final["oldVtt"] = rec["oldVtt"]
             if "sentenceId" in rec:
                 rec_final["sentenceId"] = rec["sentenceId"]
             if "tokenizationId" in rec:

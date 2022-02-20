@@ -511,7 +511,7 @@ class QuizzrTPM:
                 if not k.startswith("__"):
                     entry[k] = v
             if metadata["recType"] in processing_list:
-                entry["gentleVtt"] = sub2vtt[submission]
+                entry["vtt"] = sub2vtt[submission]
                 entry["score"] = sub2score[submission]
                 # TODO: Support for questions segmented into multiple documents
                 if metadata["qb_id"] not in qid2rec_docs:
