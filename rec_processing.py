@@ -14,6 +14,7 @@ from uuid import uuid4
 
 # import audioevaluator.evaluator
 import bson.json_util
+from func_timeout import func_timeout, FunctionTimedOut
 from pymongo.database import Database
 
 import forced_alignment
@@ -457,7 +458,11 @@ class QuizzrProcessor:
         self.logger.debug(f"r_transcript = {r_transcript!r}")
 
         try:
-            aligned_words, num_words, vtt = self.get_accuracy_and_vtt(wav_file_path, r_transcript)
+            aligned_words, num_words, vtt = func_timeout(self.config["timeout"], self.get_accuracy_and_vtt,
+                                                         args=(wav_file_path, r_transcript))
+        except FunctionTimedOut:
+            self.logger.warning("Forced alignment timed out. Skipping")
+            return {"err": "timed_out"}
         except RuntimeError as e:
             self.logger.error(f"Encountered RuntimeError: {e}. Aborting")
             return {"err": "runtime_error", "extra": str(e)}

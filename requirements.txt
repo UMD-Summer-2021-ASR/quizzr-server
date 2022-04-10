@@ -1,4 +1,5 @@
 attrs==21.2.0
+audio-evaluator==1.0.6
 CacheControl==0.12.6
 cachetools==4.2.2
 certifi==2021.5.30
@@ -11,6 +12,7 @@ firebase-admin==5.0.1
 Flask==2.0.1
 Flask-Cors==3.0.10
 Flask-Limiter==1.4
+func-timeout==4.3.5
 fuzzywuzzy==0.18.0
 google-api-core==1.30.0
 google-api-python-client==2.10.0
