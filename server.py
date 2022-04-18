@@ -763,7 +763,17 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :param blob_path: The path to a Firebase Cloud Storage object
         :return: A response containing the bytes of the audio file
         """
-        return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
+        try:
+            file = qtpm.get_file_blob(blob_path)
+        except google.api_core.exceptions.NotFound:
+            return _make_err_response(
+                "Audio not found",
+                "not_found",
+                HTTPStatus.NOT_FOUND,
+                [blob_path],
+                log_msg=True
+            )
+        return send_file(file, mimetype="audio/wav")
 
     @app.delete("/audio/<audio_id>")
     def delete_audio(audio_id):
