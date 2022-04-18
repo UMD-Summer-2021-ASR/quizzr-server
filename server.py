@@ -18,6 +18,7 @@ from http import HTTPStatus
 from secrets import token_urlsafe
 from typing import List, Union, Tuple, Dict, Any, Optional
 
+import google.api_core.exceptions
 import jsonschema.exceptions
 import pymongo.errors
 import werkzeug.datastructures
@@ -754,7 +755,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         return {"answer": correct_answer}
 
-    @app.route("/audio/<path:blob_path>", methods=["GET"])
+    @app.get("/audio/<path:blob_path>")
     def retrieve_audio_file(blob_path):
         """
         Retrieve a file from Firebase Storage. The blob path is usually in the format ``<recType>/<_id>``.
@@ -763,6 +764,57 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :return: A response containing the bytes of the audio file
         """
         return send_file(qtpm.get_file_blob(blob_path), mimetype="audio/wav")
+
+    @app.delete("/audio/<audio_id>")
+    def delete_audio(audio_id):
+        """
+        Delete an audio recording. If the "batch" query flag is set, delete all audio recordings that have the same
+        batch UUID as it.
+
+        :param audio_id: The audio ID to delete.
+        :return:
+        """
+
+        # TODO: MAKE THIS OPERATION SECURE! REQUIRE AUTHENTICATION FROM THE USER WHO IS DELETING THE RECORDING!
+        audio_doc = qtpm.audio.find_one({"_id": audio_id})
+        if _query_flag("batch") and "batchUUID" in audio_doc:
+            cursor = qtpm.audio.find({"batchUUID": audio_doc["batchUUID"]})
+            for doc in cursor:
+                try:
+                    _delete_audio(doc)
+                except google.api_core.exceptions.NotFound:
+                    return _make_err_response(
+                        "Audio not found",
+                        "not_found",
+                        HTTPStatus.NOT_FOUND,
+                        [doc["_id"]],  # TODO: Fix inconsistency with "extra"
+                        log_msg=True
+                    )
+        else:
+            try:
+                _delete_audio(audio_doc)
+            except google.api_core.exceptions.NotFound:
+                return _make_err_response(
+                    "Audio not found",
+                    "not_found",
+                    HTTPStatus.NOT_FOUND,
+                    [audio_doc["_id"]],
+                    log_msg=True
+                )
+
+        return "", HTTPStatus.OK
+
+    def _delete_audio(audio_doc):
+        """
+        Delete the audio document and pull all references to it from the corresponding user and question.
+
+        :param audio_doc: The contents of the audio document.
+        :return:
+        """
+        qtpm.delete_file_blob("/".join([audio_doc["recType"], audio_doc["_id"]]))
+        qtpm.users.update_one({"_id": audio_doc["userId"]}, {"$pull": {"recordedAudios": {"id": audio_doc["_id"]}}})
+        qtpm.rec_questions.update_many({"qb_id": audio_doc["qb_id"]}, {"$pull": {"recordings": {"id": audio_doc["_id"]}}})
+        qtpm.audio.delete_one({"_id": audio_doc["_id"]})
 
     @app.post("/socket/key")
     def generate_game_key():

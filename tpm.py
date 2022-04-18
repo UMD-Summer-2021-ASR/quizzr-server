@@ -226,6 +226,12 @@ class QuizzrTPM:
         fh = io.BytesIO(file_bytes)
         return fh
 
+    def delete_file_blob(self, blob_path: str):
+        blob_name = "/".join([self.config["BLOB_ROOT"], blob_path])
+        self._debug_variable("blob_name", blob_name)
+        blob = self.bucket.blob(blob_name)
+        blob.delete()
+
     def find_best_audio_doc(self,
                             id_list: List[str],
                             required_fields: List[str] = None,
