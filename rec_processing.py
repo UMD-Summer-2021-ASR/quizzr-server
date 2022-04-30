@@ -556,14 +556,17 @@ class QuizzrProcessor:
         submissions are left as single strings.
 
         :param submissions: The submissions to "bundle"
-        :return: A list where submissions that end with "b<number>" are grouped by their base name and where standalone
-        submissions are left as single strings
+        :return: A sorted list where submissions that end with "b<number>" are grouped by their base name and where
+        standalone submissions are left as single strings
         """
+
+        sorted_submissions = submissions.copy()
+        sorted_submissions.sort()
         bundle_list = []
         next_bundle = []
         prev_token = None
 
-        for i, submission in enumerate(submissions):
+        for i, submission in enumerate(sorted_submissions):
             match = re.match(BATCH_SUBMISSION_REGEX, submission)
 
             if match:
@@ -579,7 +582,7 @@ class QuizzrProcessor:
                 bundle_list.append(next_bundle)
                 next_bundle = []
 
-            if i + 1 >= len(submissions) and next_bundle:
+            if i + 1 >= len(sorted_submissions) and next_bundle:
                 bundle_list.append(next_bundle)
                 next_bundle = []
 
