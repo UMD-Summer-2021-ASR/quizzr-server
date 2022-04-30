@@ -37,7 +37,6 @@ class QuizzrTPM:
         :param config: The configuration to use
         :param firebase_app_specifier: A string specifying the path to the service account key or a Firebase app
         """
-        # self.MAX_RETRIES = int(os.environ.get("MAX_RETRIES") or 5)
         self.logger = logger or logging.getLogger(__name__)
         self.config = config
 
@@ -450,7 +449,6 @@ class QuizzrTPM:
         upload_count = 0
         for file_path in file_paths:
             file_name = os.path.basename(file_path)
-            # blob_name = token_urlsafe(self.config["BLOB_NAME_LENGTH"])
             blob_name = str(uuid4())
             blob_path = self.get_blob_path(blob_name, subdir)
             blob = self.bucket.blob(blob_path)

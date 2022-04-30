@@ -139,8 +139,6 @@ class QuizzrProcessorHead:
             self.submission_file_types = submission_file_types
         self.directory = directory  # May be used for the Montreal Forced Aligner
         self.rec_directory = os.path.join(self.directory, "queue")
-        # if not os.path.exists(self.rec_directory):
-        #     os.makedirs(self.rec_directory)
         self.logger = logger or logging.getLogger(__name__)
         self.qp = QuizzrProcessor(qtpm.database, self.rec_directory, config, submission_file_types, self.logger)
 
@@ -259,7 +257,6 @@ class QuizzrProcessor:
         if "normal" in typed_submissions:
             preprocess_list = QuizzrProcessor.bundle_submissions(typed_submissions["normal"])
             results = self.preprocess_submissions(preprocess_list, sub2meta)
-            # for submission in typed_submissions['normal']:
             for submission, result in results:
                 if type(submission) is list:
                     batch_uuid = str(uuid4())

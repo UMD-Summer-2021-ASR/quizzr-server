@@ -194,20 +194,7 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                      app.logger.getChild("qtpm"))
     app.logger.info("Initialized third-party services")
 
-    # app.logger.info("Initializing pre-screening program...")
-    # app.logger.debug("Instantiating QuizzrProcessorHead...")
-    # qph = rec_processing.QuizzrProcessorHead(
-    #     qtpm,
-    #     rec_dir,
-    #     app_conf["PROC_CONFIG"],
-    #     app_conf["SUBMISSION_FILE_TYPES"]
-    # )
-    # app.logger.debug("Finished instantiating QuizzrProcessorHead")
-    # app.logger.debug("Instantiating QuizzrWatcher...")
-    # qw = rec_processing.QuizzrWatcher(os.path.join(rec_dir, "queue"), qph.execute)
-    # app.logger.debug("Finished instantiating QuizzrWatcher")
     app.logger.debug("Instantiating process...")
-    # qw_process = multiprocessing.Process(target=qw.execute)
     prescreen_results_queue = multiprocessing.Queue()
     qw_process = multiprocessing.Process(target=rec_processing.start_watcher, kwargs={
         "db_name": app_conf["DATABASE"],
@@ -223,53 +210,8 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     })
     qw_process.daemon = True
     app.logger.debug("Finished instantiating process")
-    # app.logger.debug("Registering exit handler...") #
-    # atexit.register(qw_process.join) #
-    # app.logger.debug("Finished registering exit handler") #
-    # app.logger.debug("Registering signal handler...")
-    # print("This is a test message 1")
-    #
-    # def shutdown_server(signal_, frame):
-    #     # qw.done = True
-    #     qw_process.terminate()
-    #     signal.signal(signal.SIGINT, old_sig_handler)
-    #     signal.raise_signal(signal_)
-    #     # shutdown_func() *
-    #
-    # if not created_process:
-    #     old_sig_handler = signal.signal(signal.SIGINT, shutdown_server)
-    #     created_process = True
-    # # shutdown_func = request.environ.get("werkzeug.server.shutdown") *
-    # # if shutdown_func is None: *
-    # #     raise RuntimeError("Werkzeug server shutdown function not found") *
-    # # signal.signal(signal.SIGINT, shutdown_server)
-    # print("This is a test message 2")
-    # app.logger.debug("Finished registering signal handler")
     app.logger.debug("Starting process...")
 
-    # def restart_qw_process(signal_, frame):
-    #     app.logger.info("Received SIGCHLD")
-    #     app.logger.debug(f"app_attributes = {app_attributes}")
-    #     pid, stat = os.waitpid(0, 0)
-    #     if "qwPid" not in app_attributes or pid != app_attributes["qwPid"]:
-    #         app.logger.info("pid does not match or qwPid not set. Ignoring")
-    #         return
-    #     app.logger.debug(f"stat = {stat}")
-    #     app.logger.info("Restarting pre-screening program...")
-    #     if "qwStartTime" in app_attributes:
-    #         since_prev_restart = time.time() - app_attributes["qwStartTime"]
-    #         if since_prev_restart < app.config["QW_SHUTDOWN_INTERVAL_THRESHOLD"]:
-    #             # Might be better to make it use a backoff strategy.
-    #             app.logger.critical("Unable to start up pre-screening program. Forcing shutdown...")
-    #             exit(1)
-    #     app_attributes["qwStartTime"] = time.time()
-    #     qw_process.start()
-    #     app_attributes["qwPid"] = qw_process.pid
-    #     app.logger.debug(f"qwPid = {app_attributes['qwPid']}")
-
-    # if not app.config["DEBUG"]:
-    #     old_sigh = signal.signal(signal.SIGCHLD, restart_qw_process)
-    #     app.logger.debug(f"old_sigh = {old_sigh}")
     app_attributes["qwStartTime"] = time.time()
     qw_process.start()
     app_attributes["qwPid"] = qw_process.pid
@@ -341,19 +283,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                     log_msg=True
                 )
 
-            # for i in range(len(recordings)):
-            #     recording = recordings[i]
-            #     rec_type = rec_types[i]
-            #     qb_id = qb_ids[i] if len(qb_ids) > i else None
-            #     sentence_id = sentence_ids[i] if len(sentence_ids) > i else None
-            #     diarization_metadata = diarization_metadata_list[i] if len(diarization_metadata_list) > i else None
-            #     result = pre_screen(recording, rec_type, qb_id, sentence_id, user_id, diarization_metadata)
-            #
-            #     # Stops pre-screening on the first submission that fails. Meant to represent an all-or-nothing logic
-            #     # flow, but it isn't really successful.
-            #     if result[1] != HTTPStatus.ACCEPTED or not result[0].get("prescreenSuccessful"):
-            #         return result
-            # return {"prescreenSuccessful": True}, HTTPStatus.ACCEPTED
             return pre_screen(recordings, rec_types, user_id, qb_ids, sentence_ids, diarization_metadata_list,
                               expected_answers, transcripts, correct_flags)
         elif request.method == "PATCH":
@@ -648,7 +577,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         """
         arguments_list = arguments_batch.get("arguments")
         if arguments_list is None:
-            # return "undefined_arguments", HTTPStatus.BAD_REQUEST
             return _make_err_response(
                 "Argument 'arguments' is undefined",
                 "undefined_arg",
@@ -680,7 +608,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         user_answer = request.args.get("a")
 
         if qid is None or qid == '':
-            # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
             return _make_err_response(
                 "Query parameter 'qid' is undefined",
                 "undefined_arg",
@@ -689,7 +616,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 True
             )
         if not user_answer:
-            # return "arg_a_undefined", HTTPStatus.BAD_REQUEST
             return _make_err_response(
                 "Query parameter 'a' is undefined",
                 "undefined_arg",
@@ -700,7 +626,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         question = qtpm.rec_questions.find_one({"qb_id": int(qid)})
         if not question:
-            # return "question_not_found", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "Could not find question",
                 "question_not_found",
@@ -709,7 +634,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             )
         correct_answer = question.get("answer")
         if not correct_answer:
-            # return "answer_not_found", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "Question does not contain field 'answer'",
                 "answer_not_found",
@@ -724,19 +648,9 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
     @app.route("/answer_full/<int:qid>", methods=["GET"])
     def get_answer(qid):
         """Get the answer of a question. This is intended for use by a backend component."""
-        # if qid is None:
-        #     # return "arg_qid_undefined", HTTPStatus.BAD_REQUEST
-        #     return _make_err_response(
-        #         "Path parameter is undefined",
-        #         "undefined_arg",
-        #         HTTPStatus.BAD_REQUEST,
-        #         ["path"],
-        #         True
-        #     )
 
         question = qtpm.rec_questions.find_one({"qb_id": qid})
         if not question:
-            # return "question_not_found", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "Could not find question",
                 "question_not_found",
@@ -745,7 +659,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             )
         correct_answer = question.get("answer")
         if not correct_answer:
-            # return "answer_not_found", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "Question does not contain field 'answer'",
                 "answer_not_found",
@@ -897,14 +810,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             ["category_or_categories"],
             True
         )
-
-    # @app.route("/game", methods=["GET", "POST"])
-    # def game_resource():
-    #     """Resource for sharing game sessions"""
-    #     if request.method == "GET":
-    #         return get_game()
-    #     elif request.method == "POST":
-    #         return post_game()
 
     @app.get("/game/<game_id>")
     def get_game(game_id):
@@ -1561,7 +1466,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
                 )
             if result:
                 app.logger.info("User successfully created")
-                # return {"msg": "user_created"}, HTTPStatus.CREATED
                 return '', HTTPStatus.CREATED
             app.logger.error("Encountered an unknown error")
             return _make_err_response(
@@ -1580,8 +1484,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             try:
                 result = qtpm.modify_profile(user_id, update_args)
             except UsernameTakenError as e:
-                # app.logger.error(f"Username already taken: {e}. Aborting")
-                # return f"username_taken: {e}", HTTPStatus.BAD_REQUEST
                 return _make_err_response(
                     f"Username already exists: {e}",
                     "username_exists",
@@ -1592,7 +1494,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
             if result.matched_count == 1:
                 app.logger.info("User profile successfully modified")
-                # return {"msg": "user_modified"}, HTTPStatus.OK
                 return '', HTTPStatus.OK
             return _make_err_response(
                 f"No such user: {user_id}",
@@ -1605,7 +1506,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             result = qtpm.delete_profile(user_id)
             if result.deleted_count == 1:
                 app.logger.info("User profile successfully deleted")
-                # return {"msg": "user_deleted"}, HTTPStatus.OK
                 return '', HTTPStatus.OK
             return _make_err_response(
                 f"No such user: {user_id}",
@@ -1639,7 +1539,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             result = qtpm.modify_profile(other_user_id, update_args)
             if result.matched_count == 1:
                 app.logger.info("User profile successfully modified")
-                # return "other_user_modified", HTTPStatus.OK
                 return '', HTTPStatus.OK
             return _make_err_response(
                 f"No such user: {other_user_id}",
@@ -1652,7 +1551,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             result = qtpm.delete_profile(other_user_id)
             if result.deleted_count == 1:
                 app.logger.info("User profile successfully deleted")
-                # return "other_user_deleted", HTTPStatus.OK
                 return '', HTTPStatus.OK
             return _make_err_response(
                 f"No such user: {other_user_id}",
@@ -1866,8 +1764,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
 
         question_ids = list({doc["qb_id"] for doc in chain(unrec_cursor, rec_cursor)})  # Ensure no duplicates are present
         if not question_ids:
-            # app.logger.error(f"No unrecorded questions found for difficulty type '{difficulty}'. Aborting")
-            # return "unrec_empty_qids", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 f"No questions found for difficulty type '{difficulty}'",
                 "empty_qids",
@@ -1878,7 +1774,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         # Pick some questions from the found IDs
         next_questions, errors = qtpm.pick_random_questions(question_ids, ["transcript"], batch_size)
         if next_questions is None:
-            # return "unrec_corrupt_questions", HTTPStatus.NOT_FOUND
             return _make_err_response(
                 "No valid questions found",
                 "corrupt_questions",
@@ -1975,8 +1870,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             app.logger.info(f"Profile not found: {e}. Subject registered as 'anonymous'")
         except MalformedProfileError as e:
             msg = str(e)
-            # app.logger.error(f"{msg}. Aborting")
-            # return f"{msg}\n", HTTPStatus.UNAUTHORIZED
             return _make_err_response(msg, "malformed_profile", HTTPStatus.UNAUTHORIZED, log_msg=True)
 
         return {"subject": subject, "extra": {}}, HTTPStatus.OK
@@ -2078,7 +1971,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         :return: The result of calling firebase_admin.auth.verify_id_token() or a dictionary with a schema similar to
                  that function's output
         """
-        # return {"uid": app.config["DEV_UID"]}
         app.logger.info("Retrieving ID token from header 'Authorization'...")
         id_token = request.headers.get("Authorization")
 
@@ -2181,9 +2073,6 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
             err = None
         except jsonschema.exceptions.ValidationError as e:
             app.logger.error(f"Request arguments do not match schema: {e}")
-            # response = make_response(str(e))
-            # response.headers["Content-Type"] = "text/plain"
-            # err = (response, HTTPStatus.BAD_REQUEST)
             err = _make_err_response(
                 f"Request arguments do not match schema: {e}",
                 "validation_error",
