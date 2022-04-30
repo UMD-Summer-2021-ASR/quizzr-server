@@ -505,6 +505,7 @@ class QuizzrTPM:
         uid2rec_docs = {}
         qid2rec_docs = {}
         self.logger.info("Preparing document entries...")
+        user_batch_uuids = {}
         for submission, audio_id in sub2blob.items():
             entry = {
                 "_id": audio_id,
@@ -529,6 +530,9 @@ class QuizzrTPM:
             if metadata["userId"] not in uid2rec_docs:
                 uid2rec_docs[metadata["userId"]] = []
             uid2rec_docs[metadata["userId"]].append({"id": audio_id, "recType": metadata["recType"]})
+            if metadata["userId"] not in user_batch_uuids:
+                user_batch_uuids[metadata["userId"]] = set()
+            user_batch_uuids[metadata["userId"]].add(metadata["batchUUID"])
 
             self._debug_variable("entry", entry)
 
@@ -550,6 +554,8 @@ class QuizzrTPM:
             proc_results = self.audio.insert_many(other_audio_batch)
             self.logger.info(f"Inserted {len(proc_results.inserted_ids)} buzz and/or answer recording(s) into the Audio collection")
         self.add_recs_to_users(uid2rec_docs)
+        for uid, batch_uuids in user_batch_uuids.items():
+            self.increment_num_recs(uid, len(batch_uuids))
         return question_rec_results, proc_results
 
     def get_profile(self, user_id: str, visibility: str) -> Optional[dict]:
@@ -592,7 +598,8 @@ class QuizzrTPM:
             "permLevel": "normal",
             "playTime": 0,
             "creationDate": datetime.now().isoformat(),
-            "recVotes": []
+            "recVotes": [],
+            "numRecs": 0
         }
         return self.users.insert_one(profile)
 
@@ -634,17 +641,16 @@ class QuizzrTPM:
             raise MalformedProfileError(f"Field 'permLevel' not found in profile for user '{user_id}'")
         return profile["permLevel"]
 
-    def increment_num_recs(self, user_id: str, difficulty: int):
+    def increment_num_recs(self, user_id: str, count: int):
         """
-        Increment the ``"numRecs"`` stat for a user.
+        Increment the ``"numRecs"`` field for a user.
 
         :param user_id: The ID of the user profile
-        :param difficulty: The recording difficulty type to increment, including "all"
+        :param count: The count by which to increment
         """
         self.users.update_one({"_id": user_id}, {
             "$inc": {
-                "stats.recordings.numRecs.all": 1,
-                f"stats.recordings.numRecs.{difficulty}": 1
+                "numRecs": count
             }
         })
 

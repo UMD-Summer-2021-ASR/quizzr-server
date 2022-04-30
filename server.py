@@ -1367,6 +1367,24 @@ def create_app(test_overrides: dict = None, test_inst_path: str = None, test_sto
         )
         return {"results": [doc for doc in cursor]}
 
+    @app.route("/leaderboard/audio", methods=["GET"])
+    def get_audio_leaderboard():
+        """
+        Get the basic profiles of the top ``size`` players based on the number of recordings they have.
+
+        :return: A dictionary containing the "results"
+        """
+        visibility_config = app.config["VISIBILITY_CONFIGS"]["basic"]
+        arg_size = request.args.get("size")
+        size = arg_size or app.config["DEFAULT_LEADERBOARD_SIZE"]
+        cursor = qtpm.database.get_collection(visibility_config["collection"]).find(
+            {f"numRecs": {"$exists": True, "$gt": 0}},
+            sort=[(f"numRecs", pymongo.DESCENDING)],
+            limit=size,
+            projection=visibility_config["projection"]
+        )
+        return {"results": [doc for doc in cursor]}
+
     @app.route("/prescreen/<pointer>", methods=["GET"])
     def get_prescreen_status(pointer):
         """
